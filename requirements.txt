@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+joblib
+vaderSentiment
+alpaca_trade_api
+yfinance
+matplotlib
+pytest
+pyyaml

@@ -25,12 +25,22 @@ logging.basicConfig(
 )
 log = logging.getLogger("trader")
 
-API_KEY = os.environ["ALPACA_API_KEY"]
-SECRET_KEY = os.environ["ALPACA_SECRET_KEY"]
+API_KEY = os.environ.get("ALPACA_API_KEY")
+SECRET_KEY = os.environ.get("ALPACA_SECRET_KEY")
 BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
-api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL, api_version="v2")
-stream = tradeapi.Stream(API_KEY, SECRET_KEY, BASE_URL, data_feed="iex")
+api = None
+stream = None
+try:
+    if API_KEY and SECRET_KEY:
+        api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL, api_version="v2")
+        stream = tradeapi.Stream(API_KEY, SECRET_KEY, BASE_URL, data_feed="iex")
+    else:
+        log.info("ALPACA credentials not found; running in offline/fallback mode (no live stream).")
+except Exception as e:
+    log.error(f"Failed to initialize Alpaca API/stream: {e}")
+    api = None
+    stream = None
 
 SYMBOLS = ["AAPL", "TSLA", "MSFT", "NVDA"]
 

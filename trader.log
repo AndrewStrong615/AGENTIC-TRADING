@@ -1,0 +1,11 @@
+2026-08-15 22:28:28,259 [INFO] Bootstrapping historical bars...
+2026-08-15 22:28:28,568 [INFO] [AAPL] Bootstrapped 1570 historical bars.
+2026-08-15 22:28:28,730 [INFO] [TSLA] Bootstrapped 1564 historical bars.
+2026-08-15 22:28:28,871 [INFO] [MSFT] Bootstrapped 1562 historical bars.
+2026-08-15 22:28:29,004 [INFO] [NVDA] Bootstrapped 1575 historical bars.
+2026-08-15 22:28:29,378 [INFO] Three-layer trading system online: MarketDataLayer -> SignalLayer (adaptive) -> RiskGate (fixed).
+2026-08-15 22:28:29,379 [INFO] started stock data stream
+2026-08-15 22:28:29,379 [INFO] starting stock data websocket connection
+2026-08-15 22:28:29,998 [INFO] connected to: wss://stream.data.alpaca.markets/v2/iex
+2026-08-15 22:28:30,131 [INFO] subscribed to trades: ['AAPL', 'MSFT', 'NVDA', 'TSLA'], quotes: [], bars: [], updatedBars: [], dailyBars: [], statuses: [], lulds: [], cancelErrors: ['AAPL', 'MSFT', 'NVDA', 'TSLA'], corrections: ['AAPL', 'MSFT', 'NVDA', 'TSLA']
+2026-08-15 22:28:45,532 [INFO] Shutting down.

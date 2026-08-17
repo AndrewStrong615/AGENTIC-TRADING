@@ -201,6 +201,39 @@ def main():
 
     if not incidents:
         print("[monitor] No incidents detected. Monitor complete.")
+        # Auto-retrain meta-model if we have enough logged trades — helps the agents improve overnight
+        try:
+            TRAIN_META_MIN_TRADES = 100
+            # look for any backtest_trade_log CSVs in the repo trade_data or run_dir
+            import glob as _glob
+            possible_logs = _glob.glob(os.path.join(REPO_ROOT, 'trade_data', 'backtest_trade_log_*.csv')) + _glob.glob(os.path.join(run_dir, 'backtest_trade_log_*.csv'))
+            total_rows = 0
+            for p in possible_logs:
+                try:
+                    with open(p, 'r', encoding='utf-8') as _f:
+                        total_rows += sum(1 for _ in _f) - 1  # subtract header
+                except Exception:
+                    continue
+            if total_rows >= TRAIN_META_MIN_TRADES:
+                print(f"[monitor] Found {total_rows} logged trades — retraining meta-model (train_meta_model.py)...")
+                try:
+                    _proc = subprocess.run([sys.executable, os.path.join(REPO_ROOT, 'train_meta_model.py')], cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    outf = os.path.join(run_dir, 'train_meta_model_output.txt')
+                    with open(outf, 'w', encoding='utf-8') as _of:
+                        _of.write(_proc.stdout or '')
+                    print(f"[monitor] train_meta_model.py finished; output written to {outf}")
+                    # copy updated meta-model into incident artifacts if created
+                    mm_src = os.path.join(REPO_ROOT, 'trade_data', 'meta_model.joblib')
+                    if os.path.exists(mm_src):
+                        try:
+                            shutil.copy2(mm_src, run_dir)
+                            print(f"[monitor] Copied meta_model.joblib to {run_dir}")
+                        except Exception as _e:
+                            print(f"[monitor] Failed to copy meta_model.joblib: {_e}")
+                except Exception as e:
+                    print(f"[monitor] Meta-model retraining failed: {e}")
+        except Exception as e:
+            print(f"[monitor] Auto-retrain check failed: {e}")
         sys.exit(0)
 
     # On incident: create incident folder and copy artifacts

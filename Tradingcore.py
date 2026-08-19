@@ -685,6 +685,29 @@ class RiskGate:
             with open(self.trade_log_path, "a", newline="") as f:
                 csv.writer(f).writerow(row)
 
+    def record_open_order(self, symbol, action, qty, price, reason):
+        """
+        Append an "open" order row to the trade log so the dashboard can
+        surface newly placed buy orders immediately. Uses the same column
+        layout as the closed-trade rows but leaves exit fields empty.
+        """
+        signal = self.entry_signal_context.get(symbol)
+        # exit_timestamp left empty to indicate an open order
+        row = ["", symbol, price, "", "", reason]
+        if signal is not None:
+            row += [round(signal.confidence, 4), signal.direction, round(signal.trend_change_pct, 4),
+                    signal.volatility_regime, signal.trend_regime, signal.hmm_regime,
+                    round(signal.hmm_regime_prob, 4), round(signal.atr_pct, 4), round(signal.news_sentiment, 4),
+                    round(signal.batch_weight, 4), round(signal.online_weight, 4),
+                    round(signal.markov_weight, 4), round(signal.meanrev_weight, 4),
+                    round(signal.meta_win_prob, 4)]
+        else:
+            row += [None] * 14
+
+        with self._log_lock:
+            with open(self.trade_log_path, "a", newline="") as f:
+                csv.writer(f).writerow(row)
+
     def refresh_positions(self):
         if self.api is None:
             return
@@ -832,6 +855,12 @@ class RiskGate:
 
             if decision.action == "sell":
                 self.record_trade_outcome(symbol, price, decision.reason)
+            elif decision.action == "buy":
+                # Log open buy orders so they appear immediately on the dashboard
+                try:
+                    self.record_open_order(symbol, decision.action, decision.qty, price, decision.reason)
+                except Exception:
+                    pass
             with self.positions_lock:
                 delta = decision.qty if decision.action == "buy" else -decision.qty
                 self.current_positions[symbol] += delta

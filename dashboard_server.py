@@ -1233,6 +1233,151 @@ def api_chart_image():
 
 
 # ============================================================================
+# BACKTEST RUN ARCHIVE
+#
+# Expose past backtest runs saved under trade_data/backtests/ so the dashboard
+# can list and inspect historical backtest results and charts.
+# ============================================================================
+
+@app.route("/api/backtests")
+def api_backtest_runs():
+    runs_dir = os.path.join(DATA_DIR, "backtests")
+    out = []
+    if not os.path.exists(runs_dir):
+        return jsonify(out)
+
+    for name in sorted(os.listdir(runs_dir), reverse=True):
+        run_path = os.path.join(runs_dir, name)
+        if not os.path.isdir(run_path):
+            continue
+        summary_path = os.path.join(run_path, "summary.json")
+        results_path = os.path.join(run_path, "backtest_results.csv")
+        chart_path = os.path.join(run_path, "backtest_vs_spy.png")
+        job_path = os.path.join(run_path, "job.json")
+        summary = {}
+        if os.path.exists(summary_path):
+            try:
+                with open(summary_path, "r", encoding="utf-8") as f:
+                    summary = json.load(f)
+            except Exception:
+                summary = {}
+        # include list of files and whether there is a job.json for older runs
+        files = []
+        try:
+            files = sorted(os.listdir(run_path))
+        except Exception:
+            files = []
+
+        out.append({
+            "run_id": name,
+            "summary": summary,
+            "results_available": os.path.exists(results_path),
+            "chart_available": os.path.exists(chart_path),
+            "job_json_available": os.path.exists(job_path),
+            "files": files,
+        })
+
+    return jsonify(out)
+
+
+@app.route("/api/backtests/<run_id>/results")
+def api_backtest_run_results(run_id):
+    path = os.path.join(DATA_DIR, "backtests", run_id, "backtest_results.csv")
+    if not os.path.exists(path):
+        return jsonify({"error": "not found"}), 404
+    return send_file(path, mimetype="text/csv")
+
+
+@app.route("/api/backtests/<run_id>/chart")
+def api_backtest_run_chart(run_id):
+    path = os.path.join(DATA_DIR, "backtests", run_id, "backtest_vs_spy.png")
+    if not os.path.exists(path):
+        return jsonify({"error": "not found"}), 404
+    return send_file(path, mimetype="image/png")
+
+
+@app.route("/api/backtests/<run_id>/files")
+def api_backtest_run_files(run_id):
+    run_path = os.path.join(DATA_DIR, "backtests", run_id)
+    if not os.path.exists(run_path) or not os.path.isdir(run_path):
+        return jsonify({"error": "not found"}), 404
+    try:
+        files = sorted(os.listdir(run_path))
+        return jsonify({"files": files})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/backtests/<run_id>/artifact/<path:filename>")
+def api_backtest_run_artifact(run_id, filename):
+    # Serve arbitrary artifacts from the run directory but ensure path safety
+    run_path = os.path.join(DATA_DIR, "backtests", run_id)
+    if not os.path.exists(run_path) or not os.path.isdir(run_path):
+        return jsonify({"error": "not found"}), 404
+    # Normalize and check path is inside run_path
+    abs_requested = os.path.realpath(os.path.join(run_path, filename))
+    abs_run = os.path.realpath(run_path)
+    if not abs_requested.startswith(abs_run):
+        return jsonify({"error": "forbidden"}), 403
+    if not os.path.exists(abs_requested):
+        return jsonify({"error": "not found"}), 404
+    # Guess mimetype via extension for common types; leave to send_file otherwise
+    ext = os.path.splitext(abs_requested)[1].lower()
+    if ext in (".png", ".jpg", ".jpeg", ".gif"):
+        return send_file(abs_requested, mimetype=f"image/{ext.lstrip('.')}")
+    if ext in (".csv", ".txt", ".json"):
+        return send_file(abs_requested, mimetype="text/plain")
+    return send_file(abs_requested)
+
+
+@app.route("/api/backtests/<run_id>/summary")
+def api_backtest_run_summary(run_id):
+    """
+    Build a lightweight summary from per-symbol backtest trade logs when
+    backtest_results.csv/summary.json are not available. Returns JSON with
+    per-symbol metrics: total_return_pct, num_trades, win_rate_pct, avg_pnl_pct.
+    """
+    run_path = os.path.join(DATA_DIR, "backtests", run_id)
+    if not os.path.exists(run_path) or not os.path.isdir(run_path):
+        return jsonify({"error": "not found"}), 404
+    try:
+        summaries = []
+        for fname in sorted(os.listdir(run_path)):
+            if not fname.startswith("backtest_trade_log_") or not fname.endswith(".csv"):
+                continue
+            fpath = os.path.join(run_path, fname)
+            try:
+                df = pd.read_csv(fpath)
+            except Exception:
+                continue
+            if "pnl_pct" not in df.columns:
+                continue
+            df["pnl_pct"] = pd.to_numeric(df["pnl_pct"], errors="coerce")
+            df = df.dropna(subset=["pnl_pct"])
+            if df.empty:
+                continue
+            symbol = df.get("symbol", pd.Series([None])).iloc[0]
+            num_trades = int(len(df))
+            total_return = float(df["pnl_pct"].sum())
+            wins = int((df["pnl_pct"] > 0).sum())
+            win_rate = float(wins / num_trades * 100) if num_trades else 0.0
+            avg_pnl = float(df["pnl_pct"].mean())
+            summaries.append({
+                "symbol": symbol,
+                "num_trades": num_trades,
+                "total_return_pct": round(total_return, 4),
+                "win_rate_pct": round(win_rate, 2),
+                "avg_pnl_pct": round(avg_pnl, 4),
+                "file": fname,
+            })
+        # Sort by total_return_pct desc
+        summaries = sorted(summaries, key=lambda x: x["total_return_pct"], reverse=True)
+        return jsonify({"available": True, "summaries": summaries})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================================
 # LIVE TRADING
 # ============================================================================
 
@@ -4297,8 +4442,9 @@ async function loadBacktest(
         /*
          * Check whether a backtest is currently running.
          */
-
+ 
         updateBacktestLiveStatus();
+        loadBacktestRuns();
 
     } catch (error) {
 
@@ -4452,6 +4598,117 @@ async function updateBacktestLiveStatus() {
     } catch (error) {
 
         console.error(error);
+    }
+}
+
+
+/* ========================================================================
+   BACKTEST HISTORY (client)
+   ======================================================================== */
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+async function loadBacktestRuns() {
+    try {
+        const resp = await apiFetch('/api/backtests');
+        const runs = await resp.json();
+
+        // Ensure container exists
+        let container = document.getElementById('backtest-runs');
+        if (!container) {
+            const content = document.getElementById('backtest-content');
+            const el = document.createElement('div');
+            el.id = 'backtest-runs';
+            content.appendChild(el);
+            container = el;
+        }
+
+        const listHtml = runs.map(r => {
+            const completed = r.summary && r.summary.completed_at ? r.summary.completed_at : '';
+            return `<div class="backtest-run-item" style="padding:8px;border-bottom:1px solid #222;display:flex;justify-content:space-between;align-items:center;">
+                <div style="font-size:13px">
+                    <strong>${r.run_id}</strong><br>
+                    <span class="muted">${completed}</span>
+                </div>
+                <div>
+                    ${r.chart_available ? `<button class="btn" onclick="viewBacktestRunChart('${r.run_id}')">View</button>` : ''}
+                    ${r.results_available ? `<a class="link" href="/api/backtests/${r.run_id}/results" target="_blank">CSV</a>` : ''}
+                    <button class="btn" onclick="viewBacktestRunSummary('${r.run_id}')">Summary</button>
+                </div>
+            </div>`;
+        }).join('');
+
+        container.innerHTML = `<div class="card"><div class="card-header"><span class="card-title">Backtest History</span><span class="muted">Past runs</span></div><div style="max-height:260px;overflow:auto;">${listHtml || '<div class="empty">No past runs found.</div>'}</div></div>`;
+
+    } catch (e) {
+        console.error('Failed to load backtest runs', e);
+    }
+}
+
+window.viewBacktestRunChart = async function(run_id) {
+    try {
+        const spyContainer = document.getElementById('spy-chart-container');
+        if (!spyContainer) return;
+
+        spyContainer.innerHTML = `\n            <div class="card">\n                <div class="chart-title">Strategy vs SPY (run ${run_id})</div>\n                <img src="/api/backtests/${run_id}/chart" style="width:100%;display:block;border-radius:10px;">\n            </div>\n        `;
+
+        // remove any existing preview
+        const existing = document.getElementById('backtest-csv-preview');
+        if (existing) existing.remove();
+
+        // fetch a small preview of the CSV
+        const r = await apiFetch(`/api/backtests/${run_id}/results`);
+        if (r.ok) {
+            const text = await r.text();
+            const preview = text.split('\n').slice(0, 6).join('\n');
+            const previewHtml = `\n                <div class="card" id="backtest-csv-preview">\n                    <div class="chart-title">Results CSV (preview)</div>\n                    <pre style="max-height:200px;overflow:auto;background:#0f141a;padding:10px;border-radius:6px;color:#9aa4b2;">${escapeHtml(preview)}</pre>\n                </div>\n            `;
+            spyContainer.insertAdjacentHTML('afterend', previewHtml);
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+
+window.viewBacktestRunSummary = async function(run_id) {
+    try {
+        const r = await apiFetch(`/api/backtests/${run_id}/summary`);
+        const data = await r.json();
+        const spyContainer = document.getElementById('spy-chart-container');
+        if (!spyContainer) return;
+
+        // remove an existing summary preview if present
+        const existing = document.getElementById('backtest-summary');
+        if (existing) existing.remove();
+
+        let html = '';
+        if (data && data.available && Array.isArray(data.summaries) && data.summaries.length) {
+            html += `<div class="card" id="backtest-summary"><div class="card-header"><span class="card-title">Summary — ${escapeHtml(run_id)}</span></div><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Trades</th><th>Total Return %</th><th>Win Rate %</th><th>Avg PnL %</th><th>CSV</th></tr></thead><tbody>`;
+            data.summaries.forEach(s => {
+                html += `<tr>` +
+                    `<td>${escapeHtml(s.symbol || '')}</td>` +
+                    `<td class="num">${s.num_trades || 0}</td>` +
+                    `<td class="${(s.total_return_pct || 0) >= 0 ? 'green' : 'red'}">${fmtPct(s.total_return_pct || 0)}</td>` +
+                    `<td>${(s.win_rate_pct || 0).toFixed ? (s.win_rate_pct.toFixed(2) + '%') : (s.win_rate_pct + '%')}</td>` +
+                    `<td>${(s.avg_pnl_pct || 0)}</td>` +
+                    `<td>${s.file ? `<a class="link" href="/api/backtests/${run_id}/artifact/${encodeURIComponent(s.file)}" target="_blank">CSV</a>` : ''}</td>` +
+                    `</tr>`;
+            });
+            html += `</tbody></table></div></div>`;
+        } else if (data && data.error) {
+            html = `<div class="card" id="backtest-summary"><div class="empty">Error: ${escapeHtml(data.error)}</div></div>`;
+        } else {
+            html = `<div class="card" id="backtest-summary"><div class="empty">No summary available for this run.</div></div>`;
+        }
+
+        spyContainer.insertAdjacentHTML('afterend', html);
+    } catch (e) {
+        console.error(e);
     }
 }
 

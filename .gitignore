@@ -1,0 +1,5 @@
+trade_data/trader.log 
+trade_data/*.log 
+trade_data/backtests/ 
+trade_data/backtest_live.json 
+trade_data/backtest_job.json 

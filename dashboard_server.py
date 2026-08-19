@@ -5159,12 +5159,57 @@ setInterval(
     2500
 );
 
+
+// When the page becomes visible again (e.g., phone unlocked or tab foregrounded),
+// immediately refresh relevant data and restart any stalled polls. Mobile browsers
+// may throttle timers while in the background; this helps the UI catch up when
+// visibility is restored.
+document.addEventListener('visibilitychange', () => {
+    try {
+        if (document.visibilityState === 'visible') {
+
+            // Refresh script statuses and any active page content
+            refreshScriptStatuses();
+
+            const backtestPage = document.getElementById('page-backtest');
+            if (backtestPage && backtestPage.classList.contains('active')) {
+                loadBacktest(true);
+                updateBacktestLiveStatus();
+            }
+
+            const livePage = document.getElementById('page-live');
+            if (livePage && livePage.classList.contains('active')) {
+                loadLive();
+            }
+
+            // Restart polling for any running scripts in case timers were throttled
+            for (const key in scriptEls) {
+                if (!Object.prototype.hasOwnProperty.call(scriptEls, key)) continue;
+                const refs = scriptEls[key];
+                if (refs && refs.currentRunId) {
+                    try {
+                        if (runningPolls[refs.currentRunId]) {
+                            clearInterval(runningPolls[refs.currentRunId]);
+                            delete runningPolls[refs.currentRunId];
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                    pollRun(refs.currentRunId, key);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('visibilitychange handler error:', err);
+    }
+});
+
+
 </script>
 
 </body>
 </html>
 """
-
 
 # ============================================================================
 # HOME

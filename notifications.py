@@ -64,9 +64,26 @@ def notify_new_trade(symbol: str, pnl_pct: float, exit_reason: str):
                        priority="default", tags=emoji)
 
 
+def notify_order_placed(symbol: str, action: str, qty: int, price: float, reason: str = ""):
+    """Immediate notification when an order is approved and sent.
+
+    action: 'buy' or 'sell'
+    """
+    try:
+        emoji = "chart_with_upwards_trend" if action.lower() == "buy" else "chart_with_downwards_trend"
+        title = f"Order {action.upper()} {symbol}"
+        msg = f"{action.upper()} {qty} @ ${price:.2f}"
+        if reason:
+            msg += f" — {reason}"
+        send_notification(title, msg, priority="default", tags=emoji)
+    except Exception:
+        pass
+
+
 def test_notification():
     send_notification("Test notification", "If you see this, notifications are working.",
                        tags="test_tube")
+
 def notify_error(context: str, error: Exception):
     send_notification(
         "Trading Dashboard ERROR",

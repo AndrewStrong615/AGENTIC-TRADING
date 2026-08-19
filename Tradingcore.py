@@ -23,6 +23,7 @@ import json
 from dataclasses import dataclass, replace
 from collections import deque
 from datetime import datetime, timezone, timedelta
+from notifications import notify_order_placed
 from typing import Optional
 
 import numpy as np
@@ -822,6 +823,13 @@ class RiskGate:
                                    type="market", time_in_force="gtc")
             log.info(f"[{symbol}] ORDER APPROVED & SENT: {decision.action.upper()} "
                       f"{decision.qty} @ ~${price:.2f} — {decision.reason}")
+            # Send an immediate notification about the order placement so users
+            # know when an order has actually been sent from the system.
+            try:
+                notify_order_placed(symbol, decision.action, decision.qty, price, decision.reason)
+            except Exception:
+                pass
+
             if decision.action == "sell":
                 self.record_trade_outcome(symbol, price, decision.reason)
             with self.positions_lock:

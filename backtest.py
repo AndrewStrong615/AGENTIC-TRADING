@@ -1514,6 +1514,16 @@ def simulate_symbol(
         [symbol]
     )
 
+    # Seed numpy and python random for deterministic iterations when a random
+    # seed is provided. This reduces non-deterministic failures during
+    # repeated backtests and makes 'pretest' behavior reproducible.
+    try:
+        import random as _random_mod
+        np.random.seed(int(random_state))
+        _random_mod.seed(int(random_state))
+    except Exception:
+        pass
+
     signal_layer = SignalLayer(
         data_layer,
         retrain_every_n_bars=(

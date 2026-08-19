@@ -1,0 +1,22 @@
+{
+  "run_dir": "C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\artifacts\\20260817T050924Z",
+  "baseline_path": "C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\config\\baseline_metrics.json",
+  "baseline_metrics": {
+    "total_return_pct_mean": -0.014475000000009506,
+    "max_drawdown_pct_mean": -0.4866067510873675,
+    "win_rate_mean": 56.85339822855255
+  },
+  "current_metrics": {
+    "total_return_pct_mean": 0.0,
+    "max_drawdown_pct_mean": 0.0,
+    "win_rate_mean": 0.0
+  },
+  "incidents": [
+    {
+      "metric": "win_rate_mean",
+      "percent_drop": 100.0,
+      "threshold": 10.0
+    }
+  ],
+  "checked_at": "2026-08-17T05:10:44.753825Z"
+}

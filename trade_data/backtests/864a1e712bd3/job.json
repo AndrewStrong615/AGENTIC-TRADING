@@ -1,0 +1,19 @@
+{
+  "run_id": "864a1e712bd3",
+  "status": "failed",
+  "current_symbol": "AAPL",
+  "symbol_index": 1,
+  "total_symbols": 8,
+  "window_index": 1,
+  "total_windows": 4,
+  "iteration": 4,
+  "total_iterations": 4,
+  "progress": 3.125,
+  "elapsed_seconds": 1904.8550398349762,
+  "estimated_seconds": 60951.95156097412,
+  "eta_seconds": 0.0,
+  "message": "Backtest failed.",
+  "error": "Traceback (most recent call last):\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 2537, in main\n    write_live_data(\n    ~~~~~~~~~~~~~~~^\n        equity_curve=live_curve,\n        ^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<13 lines>...\n        },\n        ^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 535, in write_live_data\n    atomic_json_write(\n    ~~~~~~~~~~~~~~~~~^\n        os.path.join(\n        ^^^^^^^^^^^^^\n    ...<3 lines>...\n        payload,\n        ^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 271, in atomic_json_write\n    os.replace(\n    ~~~~~~~~~~^\n        tmp,\n        ^^^^\n        path,\n        ^^^^^\n    )\n    ^\nPermissionError: [WinError 5] Access is denied: 'trade_data\\\\backtests\\\\864a1e712bd3\\\\live.json.tmp' -> 'trade_data\\\\backtests\\\\864a1e712bd3\\\\live.json'\n",
+  "completed": false,
+  "updated_at": "2026-08-19T04:06:34.447974Z"
+}

@@ -1,0 +1,13 @@
+exit_timestamp,symbol,entry_price,exit_price,pnl_pct,exit_reason,entry_confidence,entry_direction,entry_trend_change_pct,entry_volatility_regime,entry_trend_regime,entry_hmm_regime,entry_hmm_regime_prob,entry_atr_pct,entry_news_sentiment,entry_batch_weight,entry_online_weight,entry_markov_weight,entry_meanrev_weight,entry_meta_win_prob
+2026-08-18T22:02:43.062637,JPM,365.158016,364.487088,-0.1851,stop-loss hit (0.15%),0.6226,up,0.0377,low,choppy,bull,1.0,0.0492,0.4019,0.0,0.0,1.0,0.0,0.4554
+2026-08-18T22:03:38.684952,JPM,365.643113,364.817022,-0.2273,stop-loss hit (0.15%),0.6351,up,0.2614,high,trending_up,bull,1.0,0.0966,-0.1707,0.0,0.0,1.0,0.0,0.4324
+2026-08-18T22:04:02.882631,JPM,360.056996,359.413103,-0.1802,stop-loss hit (0.15%),0.6477,up,0.0809,normal,trending_up,bull,0.951,0.0602,0.0,0.0,0.0,1.0,0.0,0.4643
+2026-08-18T22:04:06.252387,JPM,360.517088,361.022781,0.1389,take-profit hit (0.15%),0.6409,up,0.0887,normal,trending_up,bull,0.9662,0.0316,0.0,0.0,0.0,1.0,0.0,0.4579
+2026-08-18T22:04:30.842599,JPM,365.158016,364.487088,-0.1851,stop-loss hit (0.15%),0.6226,up,0.0377,low,choppy,bull,1.0,0.0492,0.4019,0.0,0.0,1.0,0.0,0.4554
+2026-08-18T22:05:24.109507,JPM,365.643113,364.817022,-0.2273,stop-loss hit (0.15%),0.6351,up,0.2614,high,trending_up,bull,1.0,0.0966,-0.1707,0.0,0.0,1.0,0.0,0.4324
+2026-08-18T22:05:49.257624,JPM,360.056996,359.413103,-0.1802,stop-loss hit (0.15%),0.6477,up,0.0809,normal,trending_up,bull,0.951,0.0602,0.0,0.0,0.0,1.0,0.0,0.4643
+2026-08-18T22:05:52.740807,JPM,360.517088,361.022781,0.1389,take-profit hit (0.15%),0.6409,up,0.0887,normal,trending_up,bull,0.9662,0.0316,0.0,0.0,0.0,1.0,0.0,0.4579
+2026-08-18T22:06:16.952465,JPM,365.158016,364.487088,-0.1851,stop-loss hit (0.15%),0.6226,up,0.0377,low,choppy,bull,1.0,0.0492,0.4019,0.0,0.0,1.0,0.0,0.4554
+2026-08-18T22:07:09.968018,JPM,365.643113,364.817022,-0.2273,stop-loss hit (0.15%),0.6351,up,0.2614,high,trending_up,bull,1.0,0.0966,-0.1707,0.0,0.0,1.0,0.0,0.4324
+2026-08-18T22:07:34.930025,JPM,360.056996,359.413103,-0.1802,stop-loss hit (0.15%),0.6477,up,0.0809,normal,trending_up,bull,0.951,0.0602,0.0,0.0,0.0,1.0,0.0,0.4643
+2026-08-18T22:07:38.473320,JPM,360.517088,361.022781,0.1389,take-profit hit (0.15%),0.6409,up,0.0887,normal,trending_up,bull,0.9662,0.0316,0.0,0.0,0.0,1.0,0.0,0.4579

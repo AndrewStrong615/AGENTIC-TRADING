@@ -1,0 +1,17 @@
+2026-08-17T04:33:15.530120Z RUN_BACKTEST commit=18ff223283f3f4439099e4e12850ceaf08928f4a branch=main ret=1 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T043313Z
+2026-08-17T04:36:06.343743Z RUN_BACKTEST commit=None branch=None ret=1 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T043603Z
+2026-08-17T05:01:31.070657Z RUN_BACKTEST commit=None branch=None ret=1 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T050128Z
+2026-08-17T05:03:13.643917Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T050144Z
+2026-08-17T05:04:39.123350Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T050319Z
+2026-08-17T05:05:58.594214Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T050439Z
+2026-08-17T05:07:18.291468Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T050600Z
+2026-08-17T05:08:39.845702Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T050720Z
+2026-08-17T05:08:41.857317Z TRIAGE incident=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\incident-20260817T050439Z causes=['unknown']
+2026-08-17T05:10:44.687308Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T050924Z
+2026-08-17T05:13:22.952031Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T051049Z
+2026-08-17T05:14:45.080248Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T051325Z
+2026-08-17T05:16:06.235086Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T051447Z
+2026-08-17T05:16:08.250017Z TRIAGE incident=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\incident-20260817T051044Z causes=['unknown']
+2026-08-17T05:16:08.712869Z RUN_UNIT_TESTS commit=None branch=None ret=1 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T051608Z-tests
+2026-08-17T05:17:28.645764Z RUN_BACKTEST commit=None branch=None ret=0 dir=C:\Users\a1str\OneDrive\Desktop\Trading bot\artifacts\20260817T051608Z
+2026-08-17T05:17:28.654887Z PROPOSE_FIX branch=autofix/incident-20260817T051044Z-unknown-f1f190 incident=incident-20260817T051044Z primary=unknown

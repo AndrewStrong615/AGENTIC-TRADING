@@ -1,0 +1,19 @@
+{
+  "run_id": "72892516827a",
+  "status": "failed",
+  "current_symbol": "AAPL",
+  "symbol_index": 1,
+  "total_symbols": 8,
+  "window_index": 1,
+  "total_windows": 1,
+  "iteration": 1,
+  "total_iterations": 3,
+  "progress": 0.0,
+  "elapsed_seconds": 41.03016662597656,
+  "estimated_seconds": 1576.079907016365,
+  "eta_seconds": 0.0,
+  "message": "Backtest failed.",
+  "error": "Traceback (most recent call last):\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 2477, in main\n    ) = simulate_symbol_iterations(\n        ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        symbol,\n        ^^^^^^^\n    ...<5 lines>...\n        symbol_number,\n        ^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 1870, in simulate_symbol_iterations\n    simulate_symbol(\n    ~~~~~~~~~~~~~~~^\n        symbol,\n        ^^^^^^^\n    ...<12 lines>...\n        iteration=it + 1,\n        ^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 1667, in simulate_symbol\n    update_progress(\n    ~~~~~~~~~~~~~~~^\n        completed_units,\n        ^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n        f\"{i + 1}/{n}\",\n        ^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 595, in update_progress\n    update_job(\n    ~~~~~~~~~~^\n        status=\"running\",\n        ^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        completed=False,\n        ^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 450, in update_job\n    atomic_json_write(\n    ~~~~~~~~~~~~~~~~~^\n        os.path.join(\n        ^^^^^^^^^^^^^\n    ...<3 lines>...\n        state,\n        ^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 271, in atomic_json_write\n    os.replace(\n    ~~~~~~~~~~^\n        tmp,\n        ^^^^\n        path,\n        ^^^^^\n    )\n    ^\nPermissionError: [WinError 5] Access is denied: 'trade_data\\\\backtests\\\\72892516827a\\\\job.json.tmp' -> 'trade_data\\\\backtests\\\\72892516827a\\\\job.json'\n",
+  "completed": false,
+  "updated_at": "2026-08-19T01:20:10.227906Z"
+}

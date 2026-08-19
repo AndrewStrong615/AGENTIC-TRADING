@@ -1,0 +1,3 @@
+symbol,total_return_pct_mean,total_return_pct_std,max_drawdown_pct_mean,max_drawdown_pct_std,num_trades_mean,num_trades_std,win_rate_mean,win_rate_std,window
+AAPL,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,Window 1: 2026-08-10 to 2026-08-17
+SPY,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,Window 1: 2026-08-10 to 2026-08-17

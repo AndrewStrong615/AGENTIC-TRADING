@@ -110,6 +110,13 @@ class MarketDataLayer:
         self._hmm_state_labels = {}
         self._hmm_last_result = {s: ("unavailable", 0.0) for s in symbols}
 
+        # Increments each time a bar actually CLOSES (a new time bucket
+        # starts), as opposed to every tick. Used by SignalLayer to tell
+        # "a genuinely new bar closed" apart from "another tick arrived
+        # within the same still-forming bar" — ticks now update predictions
+        # live, but training/retraining still happens per real bar, not per tick.
+        self.bar_close_count = {s: 0 for s in symbols}
+
     def update_bar(self, symbol, price, size, ts):
         with self._bars_lock:
             bucket = int(ts // self.BAR_SECONDS) * self.BAR_SECONDS
@@ -117,6 +124,7 @@ class MarketDataLayer:
             if cb is None or cb["t"] != bucket:
                 if cb is not None:
                     self.bars[symbol].append(cb)
+                    self.bar_close_count[symbol] = self.bar_close_count.get(symbol, 0) + 1
                 self.current_bar[symbol] = {"t": bucket, "o": price, "h": price,
                                              "l": price, "c": price, "v": size}
             else:
@@ -126,12 +134,28 @@ class MarketDataLayer:
                 cb["v"] += size
 
     def seed_bar(self, symbol, bar_dict):
+        # Used by backtesting, where every seeded bar is already "closed" —
+        # counts as a bar-close event, same as a live rollover.
         with self._bars_lock:
             self.bars[symbol].append(bar_dict)
+            self.bar_close_count[symbol] = self.bar_close_count.get(symbol, 0) + 1
 
-    def get_bars(self, symbol):
+    def get_bars(self, symbol, include_partial=False):
+        """By default returns only COMPLETED bars (unchanged behavior — used
+        for ATR/regime/HMM and for training data). Pass include_partial=True
+        to also get the still-forming current bar appended as the last
+        entry, reflecting the very latest tick — this is what lets live
+        predictions actually update between bar closes instead of repeating
+        a stale value until the next bar completes."""
         with self._bars_lock:
-            return list(self.bars[symbol])
+            bars = list(self.bars[symbol])
+            if include_partial and self.current_bar[symbol] is not None:
+                bars = bars + [dict(self.current_bar[symbol])]
+            return bars
+
+    def get_bar_close_count(self, symbol):
+        with self._bars_lock:
+            return self.bar_close_count.get(symbol, 0)
 
     def bootstrap_history(self, days=None):
         if self.api is None:
@@ -484,38 +508,48 @@ class SignalLayer:
             self.weights[symbol] = {e: w / total for e, w in new_weights.items()}
 
     def generate(self, symbol) -> Optional[TradeSignal]:
-        bar_list = self.data.get_bars(symbol)
-        if len(bar_list) < self.MIN_BARS_FOR_MODEL:
+        # completed_bars: only fully-closed bars — used for training labels
+        # and batch retraining, exactly as before. live_bars: completed bars
+        # PLUS the still-forming current bar — used for the actual prediction,
+        # so confidence reflects the latest tick's price, not a stale value
+        # repeated until the next bar closes.
+        completed_bars = self.data.get_bars(symbol)
+        if len(completed_bars) < self.MIN_BARS_FOR_MODEL:
             return None
+        closes_completed = np.array([b["c"] for b in completed_bars], dtype=float)
 
-        closes = np.array([b["c"] for b in bar_list], dtype=float)
-
+        # --- learn from the outcome of the PREVIOUS prediction, but only
+        # when a bar has genuinely closed since last time — not every tick ---
+        current_count = self.data.get_bar_close_count(symbol)
         prev = self.pending.get(symbol)
-        if prev is not None and prev["num_bars"] < len(bar_list):
-            true_label = 1 if closes[-1] > closes[-2] else 0
+        if prev is not None and current_count > prev.get("bar_close_count", -1):
+            true_label = 1 if closes_completed[-1] > closes_completed[-2] else 0
             self._update_online_and_weights(symbol, true_label)
+            self.bars_since_retrain[symbol] = self.bars_since_retrain.get(symbol, self.retrain_every_n_bars) + 1
 
+        # --- periodic batch retrain, still counted in real bars, not ticks ---
         self.bars_since_retrain.setdefault(symbol, self.retrain_every_n_bars)
         batch_model = self.batch_models.get(symbol)
         if batch_model is None or self.bars_since_retrain[symbol] >= self.retrain_every_n_bars:
-            trained = self._train_batch(symbol, bar_list)
+            trained = self._train_batch(symbol, completed_bars)  # _train_batch resets the counter internally
             if trained is not None:
                 batch_model = trained
                 self.batch_models[symbol] = batch_model
-        self.bars_since_retrain[symbol] = self.bars_since_retrain.get(symbol, 0) + 1
 
         if batch_model is None:
             return None
 
-        X = self._features(bar_list)
-        latest_X = X[-1]
+        # --- live prediction: reflects the current tick's price ---
+        live_bars = self.data.get_bars(symbol, include_partial=True) or completed_bars
+        X_live = self._features(live_bars)
+        latest_X = X_live[-1]
         online_model = self.online_models.get(symbol)
 
         p_up = {
             "batch": self._p_up_from_classifier(batch_model, latest_X),
             "online": self._p_up_from_classifier(online_model, latest_X),
-            "markov": self._markov_p_up(bar_list),
-            "meanrev": self._meanrev_p_up(bar_list),
+            "markov": self._markov_p_up(live_bars),
+            "meanrev": self._meanrev_p_up(live_bars),
         }
 
         weights = self.weights.setdefault(symbol, {e: 1.0 / len(self.EXPERTS) for e in self.EXPERTS})
@@ -528,16 +562,17 @@ class SignalLayer:
             p = p_up[expert]
             return p if direction == "up" else (1 - p)
 
-        self.pending[symbol] = {"features": latest_X, "p_up": p_up, "num_bars": len(bar_list)}
+        self.pending[symbol] = {"features": latest_X, "p_up": p_up, "bar_close_count": current_count}
 
-        recent = closes[-15:]
+        closes_live = np.array([b["c"] for b in live_bars], dtype=float)
+        recent = closes_live[-15:]
         x = np.arange(len(recent)).reshape(-1, 1)
         reg = LinearRegression().fit(x, recent.reshape(-1, 1))
         predicted = reg.predict(np.array([[len(recent) + 3]]))[0][0]
         trend_change_pct = ((predicted - recent[-1]) / recent[-1]) * 100
 
         atr_pct, vol_regime = self.data.current_atr_and_regime(symbol)
-        trend_regime = self.data.trend_regime(bar_list, atr_pct)
+        trend_regime = self.data.trend_regime(completed_bars, atr_pct)
         hmm_regime, hmm_prob = self.data.current_hmm_regime(symbol)
         sentiment = self.data.get_news_sentiment(symbol)
 

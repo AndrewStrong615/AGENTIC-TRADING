@@ -1,0 +1,2 @@
+exit_timestamp,symbol,entry_price,exit_price,pnl_pct,exit_reason,entry_confidence,entry_direction,entry_trend_change_pct,entry_volatility_regime,entry_trend_regime,entry_hmm_regime,entry_hmm_regime_prob,entry_atr_pct,entry_news_sentiment,entry_batch_weight,entry_online_weight,entry_markov_weight,entry_meanrev_weight,entry_meta_win_prob
+2026-08-18T20:20:03.512591,AAPL,306.561299,305.498888,-0.3482,stop-loss hit (0.32%),0.6309,up,0.2477,high,trending_up,bear,0.9835,0.2155,0.2988,0.0,0.0,1.0,0.0,0.3928

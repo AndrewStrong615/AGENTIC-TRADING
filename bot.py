@@ -42,7 +42,7 @@ except Exception as e:
     api = None
     stream = None
 
-SYMBOLS = ["AAPL", "TSLA", "MSFT", "NVDA"]
+SYMBOLS = ["AAPL", "TSLA", "MSFT", "NVDA", "JPM", "XOM", "JNJ", "SPY"]
 
 data_layer = MarketDataLayer(SYMBOLS, api_client=api)
 meta_filter = MetaModelFilter(os.path.join(DATA_DIR, "meta_model.joblib"))

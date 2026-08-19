@@ -1,0 +1,7 @@
+exit_timestamp,symbol,entry_price,exit_price,pnl_pct,exit_reason,entry_confidence,entry_direction,entry_trend_change_pct,entry_volatility_regime,entry_trend_regime,entry_hmm_regime,entry_hmm_regime_prob,entry_atr_pct,entry_news_sentiment,entry_batch_weight,entry_online_weight,entry_markov_weight,entry_meanrev_weight,entry_meta_win_prob
+2026-08-18T03:17:38.419276,SPY,732.071384,730.758819,-0.18,stop-loss hit (0.15%),0.6613,up,0.0649,low,choppy,bear,0.7052,0.0226,0.1729,0.0,0.0,1.0,0.0,0.4302
+2026-08-18T03:18:35.301532,SPY,742.093388,740.681834,-0.1909,stop-loss hit (0.15%),0.6271,up,0.0435,high,trending_down,bear,0.3871,0.0322,0.1303,0.0,0.0,1.0,0.0,0.5085
+2026-08-18T03:20:38.487462,SPY,732.071384,730.758819,-0.18,stop-loss hit (0.15%),0.6613,up,0.0649,low,choppy,bear,0.7052,0.0226,0.1729,0.0,0.0,1.0,0.0,0.4302
+2026-08-18T03:21:35.333191,SPY,742.093388,740.681834,-0.1909,stop-loss hit (0.15%),0.6271,up,0.0435,high,trending_down,bear,0.3871,0.0322,0.1303,0.0,0.0,1.0,0.0,0.5085
+2026-08-18T03:23:38.017773,SPY,732.071384,730.758819,-0.18,stop-loss hit (0.15%),0.6613,up,0.0649,low,choppy,bear,0.7052,0.0226,0.1729,0.0,0.0,1.0,0.0,0.4302
+2026-08-18T03:24:34.911466,SPY,742.093388,740.681834,-0.1909,stop-loss hit (0.15%),0.6271,up,0.0435,high,trending_down,bear,0.3871,0.0322,0.1303,0.0,0.0,1.0,0.0,0.5085

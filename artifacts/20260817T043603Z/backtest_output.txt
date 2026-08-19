@@ -1,0 +1,35 @@
+[autofix] ALPACA credentials not found; running in fallback mode (yfinance/synthetic).
+
+############################################################
+# Window 1: 2026-07-17 to 2026-08-16
+############################################################
+Fetching bars for AAPL...
+  yfinance not installed; falling back to synthetic data for fetch_bars().
+Traceback (most recent call last):
+  File "pandas/_libs/tslibs/offsets.pyx", line 6238, in pandas._libs.tslibs.offsets._get_offset
+KeyError: 'T'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "pandas/_libs/tslibs/offsets.pyx", line 6369, in pandas._libs.tslibs.offsets.to_offset
+  File "pandas/_libs/tslibs/offsets.pyx", line 6244, in pandas._libs.tslibs.offsets._get_offset
+  File "pandas/_libs/tslibs/offsets.pyx", line 6162, in pandas._libs.tslibs.offsets.raise_invalid_freq
+ValueError: Invalid frequency: T. Failed to parse with error message: KeyError('T'). Did you mean min?
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\a1str\OneDrive\Desktop\Trading bot\backtest.py", line 551, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\a1str\OneDrive\Desktop\Trading bot\backtest.py", line 496, in main
+    df = fetch_bars(symbol, WINDOW_LENGTH_DAYS, end_offset_days=end_offset_days)
+  File "C:\Users\a1str\OneDrive\Desktop\Trading bot\backtest.py", line 246, in fetch_bars
+    rng = pd.date_range(start=start, end=end, freq='1T')
+  File "C:\Users\a1str\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pandas\core\indexes\datetimes.py", line 1442, in date_range
+    freq = to_offset(freq)
+  File "pandas/_libs/tslibs/offsets.pyx", line 6254, in pandas._libs.tslibs.offsets.to_offset
+  File "pandas/_libs/tslibs/offsets.pyx", line 6377, in pandas._libs.tslibs.offsets.to_offset
+  File "pandas/_libs/tslibs/offsets.pyx", line 6162, in pandas._libs.tslibs.offsets.raise_invalid_freq
+ValueError: Invalid frequency: 1T. Failed to parse with error message: ValueError("Invalid frequency: T. Failed to parse with error message: KeyError('T'). Did you mean min?")

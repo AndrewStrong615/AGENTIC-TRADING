@@ -1,0 +1,46 @@
+[autofix] ALPACA credentials not found; running in fallback mode (yfinance/synthetic).
+[autofix] FAST_BACKTEST enabled: shortening backtest for CI/agents
+
+############################################################
+# Window 1: 2026-08-10 to 2026-08-17
+############################################################
+Fetching bars for AAPL...
+  yfinance not installed; falling back to synthetic data for fetch_bars().
+Fetching news sentiment for AAPL...
+  AAPL: news fetch failed (AttributeError), retrying in 2s...
+  AAPL: news fetch failed (AttributeError), retrying in 4s...
+  AAPL: news fetch failed after 3 attempts, proceeding with neutral sentiment ('NoneType' object has no attribute 'get_news').
+Running 1 iterations for AAPL...
+
+=== AAPL (avg of 1 runs) ===
+Total return:     +0.00%  (std 0.00)
+Max drawdown:     0.00%  (std 0.00)
+Trades:           0  (std 0.0)
+Win rate:         0.0%  (std 0.0)
+Fetching bars for SPY...
+  yfinance not installed; falling back to synthetic data for fetch_bars().
+Fetching news sentiment for SPY...
+  SPY: news fetch failed (AttributeError), retrying in 2s...
+  SPY: news fetch failed (AttributeError), retrying in 4s...
+  SPY: news fetch failed after 3 attempts, proceeding with neutral sentiment ('NoneType' object has no attribute 'get_news').
+Running 1 iterations for SPY...
+
+=== SPY (avg of 1 runs) ===
+Total return:     +0.00%  (std 0.00)
+Max drawdown:     0.00%  (std 0.00)
+Trades:           0  (std 0.0)
+Win rate:         0.0%  (std 0.0)
+
+=== Window 1: 2026-08-10 to 2026-08-17 Combined (avg of 1 runs each) ===
+Average return across symbols: +0.00%
+Total trades across symbols:   0
+  yfinance not installed; falling back to synthetic data for fetch_bars().
+
+============================================================
+CROSS-WINDOW COMPARISON (avg of 1 runs per window)
+============================================================
+Window 1: 2026-08-10 to 2026-08-17             avg return +0.00%   avg max drawdown 0.00%   trades 0
+
+Saved all results to trade_data\backtest_results.csv
+
+Saved comparison chart to trade_data\backtest_vs_spy.png

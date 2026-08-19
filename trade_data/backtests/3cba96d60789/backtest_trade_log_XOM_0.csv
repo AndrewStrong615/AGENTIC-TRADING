@@ -1,0 +1,11 @@
+exit_timestamp,symbol,entry_price,exit_price,pnl_pct,exit_reason,entry_confidence,entry_direction,entry_trend_change_pct,entry_volatility_regime,entry_trend_regime,entry_hmm_regime,entry_hmm_regime_prob,entry_atr_pct,entry_news_sentiment,entry_batch_weight,entry_online_weight,entry_markov_weight,entry_meanrev_weight,entry_meta_win_prob
+2026-08-18T22:08:35.643748,XOM,159.426878,159.948004,0.3237,take-profit hit (0.31%),0.629,up,0.1738,high,trending_up,bear,0.8318,0.1244,0.0,0.0,0.0,1.0,0.0,0.387
+2026-08-18T22:08:36.958063,XOM,160.332059,160.887816,0.3435,take-profit hit (0.25%),0.6425,up,0.1324,high,trending_up,neutral,0.3769,0.1016,0.0,0.0,0.0,1.0,0.0,0.4275
+2026-08-18T22:08:37.578220,XOM,161.097212,160.757842,-0.2138,stop-loss hit (0.15%),0.6614,up,0.1647,normal,trending_up,neutral,0.9974,0.0585,0.0,0.0,0.0,1.0,0.0,0.4842
+2026-08-18T22:08:38.059897,XOM,160.63712,160.947804,0.1903,take-profit hit (0.16%),0.7006,up,0.113,normal,choppy,neutral,0.994,0.0636,0.0,0.0,0.0,1.0,0.0,0.535
+2026-08-18T22:08:38.353230,XOM,161.13722,160.737846,-0.251,stop-loss hit (0.15%),0.6501,up,0.0263,normal,trending_up,bear,0.9996,0.0681,0.0,0.0,0.0,1.0,0.0,0.4836
+2026-08-18T22:10:20.267668,XOM,159.426878,159.948004,0.3237,take-profit hit (0.31%),0.629,up,0.1738,high,trending_up,bear,0.8318,0.1244,0.0,0.0,0.0,1.0,0.0,0.387
+2026-08-18T22:10:21.436656,XOM,160.332059,160.887816,0.3435,take-profit hit (0.25%),0.6425,up,0.1324,high,trending_up,neutral,0.3769,0.1016,0.0,0.0,0.0,1.0,0.0,0.4275
+2026-08-18T22:10:21.827316,XOM,161.097212,160.757842,-0.2138,stop-loss hit (0.15%),0.6614,up,0.1647,normal,trending_up,neutral,0.9974,0.0585,0.0,0.0,0.0,1.0,0.0,0.4842
+2026-08-18T22:10:22.440814,XOM,160.63712,160.947804,0.1903,take-profit hit (0.16%),0.7006,up,0.113,normal,choppy,neutral,0.994,0.0636,0.0,0.0,0.0,1.0,0.0,0.535
+2026-08-18T22:10:22.723723,XOM,161.13722,160.737846,-0.251,stop-loss hit (0.15%),0.6501,up,0.0263,normal,trending_up,bear,0.9996,0.0681,0.0,0.0,0.0,1.0,0.0,0.4836

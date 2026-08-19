@@ -1,0 +1,10 @@
+exit_timestamp,symbol,entry_price,exit_price,pnl_pct,exit_reason,entry_confidence,entry_direction,entry_trend_change_pct,entry_volatility_regime,entry_trend_regime,entry_hmm_regime,entry_hmm_regime_prob,entry_atr_pct,entry_news_sentiment,entry_batch_weight,entry_online_weight,entry_markov_weight,entry_meanrev_weight,entry_meta_win_prob
+2026-08-18T02:52:03.591810,JPM,314.497886,314.996988,0.1571,take-profit hit (0.15%),0.6585,up,0.0205,normal,trending_down,neutral,0.7495,0.0398,-0.1179,0.0,0.0,1.0,0.0,0.4359
+2026-08-18T02:52:07.858628,JPM,319.628912,318.816224,-0.2558,stop-loss hit (0.16%),0.6322,up,0.2378,high,trending_up,bull,0.6248,0.1078,0.1721,0.0,0.0,1.0,0.0,0.3966
+2026-08-18T02:54:42.983032,JPM,301.635314,302.03958,0.1324,take-profit hit (0.15%),0.6656,up,0.0464,low,choppy,bear,0.941,0.0481,0.0,0.0,0.0,1.0,0.0,0.4969
+2026-08-18T02:54:50.068577,JPM,314.497886,314.996988,0.1571,take-profit hit (0.15%),0.6585,up,0.0205,normal,trending_down,neutral,0.7495,0.0398,-0.1179,0.0,0.0,1.0,0.0,0.4359
+2026-08-18T02:54:54.416895,JPM,319.628912,318.816224,-0.2558,stop-loss hit (0.16%),0.6322,up,0.2378,high,trending_up,bull,0.6248,0.1078,0.1721,0.0,0.0,1.0,0.0,0.3966
+2026-08-18T02:57:29.186798,JPM,301.635314,302.03958,0.1324,take-profit hit (0.15%),0.6656,up,0.0464,low,choppy,bear,0.941,0.0481,0.0,0.0,0.0,1.0,0.0,0.4969
+2026-08-18T02:57:36.312570,JPM,314.497886,314.996988,0.1571,take-profit hit (0.15%),0.6585,up,0.0205,normal,trending_down,neutral,0.7495,0.0398,-0.1179,0.0,0.0,1.0,0.0,0.4359
+2026-08-18T02:57:40.579248,JPM,319.628912,318.816224,-0.2558,stop-loss hit (0.16%),0.6322,up,0.2378,high,trending_up,bull,0.6248,0.1078,0.1721,0.0,0.0,1.0,0.0,0.3966
+2026-08-18T03:00:14.507085,JPM,301.635314,302.03958,0.1324,take-profit hit (0.15%),0.6656,up,0.0464,low,choppy,bear,0.941,0.0481,0.0,0.0,0.0,1.0,0.0,0.4969

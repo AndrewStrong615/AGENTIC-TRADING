@@ -1,0 +1,16 @@
+exit_timestamp,symbol,entry_price,exit_price,pnl_pct,exit_reason,entry_confidence,entry_direction,entry_trend_change_pct,entry_volatility_regime,entry_trend_regime,entry_hmm_regime,entry_hmm_regime_prob,entry_atr_pct,entry_news_sentiment,entry_batch_weight,entry_online_weight,entry_markov_weight,entry_meanrev_weight,entry_meta_win_prob
+2026-08-18T21:44:07.199450,TSLA,334.931972,333.153356,-0.5325,stop-loss hit (0.22%),0.6673,up,0.1149,normal,trending_up,neutral,1.0,0.1439,0.2544,0.0,0.0,1.0,0.0,0.4461
+2026-08-18T21:44:46.884790,TSLA,332.97158,335.202946,0.6686,take-profit hit (0.57%),0.6654,up,0.4192,high,trending_up,bear,0.8833,0.2282,0.116,0.0,0.0,1.0,0.0,0.3675
+2026-08-18T21:44:54.341199,TSLA,335.607107,336.467693,0.2549,take-profit hit (0.27%),0.7082,up,0.1623,high,trending_down,neutral,0.9591,0.1075,0.116,0.0,0.0,1.0,0.0,0.4627
+2026-08-18T21:44:55.728934,TSLA,336.27224,336.9326,0.1949,take-profit hit (0.16%),0.6913,up,0.0111,low,choppy,neutral,0.8751,0.0647,0.116,0.0,0.0,1.0,0.0,0.5101
+2026-08-18T21:45:21.370043,TSLA,340.933172,341.571672,0.1858,take-profit hit (0.15%),0.6256,up,0.0468,low,trending_down,neutral,0.9968,0.0531,0.3899,0.0,0.0,1.0,0.0,0.4814
+2026-08-18T21:46:06.453326,TSLA,334.931972,333.153356,-0.5325,stop-loss hit (0.22%),0.6673,up,0.1149,normal,trending_up,neutral,1.0,0.1439,0.2544,0.0,0.0,1.0,0.0,0.4461
+2026-08-18T21:46:46.292633,TSLA,332.97158,335.202946,0.6686,take-profit hit (0.57%),0.6654,up,0.4192,high,trending_up,bear,0.8833,0.2282,0.116,0.0,0.0,1.0,0.0,0.3675
+2026-08-18T21:46:54.000920,TSLA,335.607107,336.467693,0.2549,take-profit hit (0.27%),0.7082,up,0.1623,high,trending_down,neutral,0.9591,0.1075,0.116,0.0,0.0,1.0,0.0,0.4627
+2026-08-18T21:46:55.528348,TSLA,336.27224,336.9326,0.1949,take-profit hit (0.16%),0.6913,up,0.0111,low,choppy,neutral,0.8751,0.0647,0.116,0.0,0.0,1.0,0.0,0.5101
+2026-08-18T21:47:21.292555,TSLA,340.933172,341.571672,0.1858,take-profit hit (0.15%),0.6256,up,0.0468,low,trending_down,neutral,0.9968,0.0531,0.3899,0.0,0.0,1.0,0.0,0.4814
+2026-08-18T21:48:07.091292,TSLA,334.931972,333.153356,-0.5325,stop-loss hit (0.22%),0.6673,up,0.1149,normal,trending_up,neutral,1.0,0.1439,0.2544,0.0,0.0,1.0,0.0,0.4461
+2026-08-18T21:48:47.856590,TSLA,332.97158,335.202946,0.6686,take-profit hit (0.57%),0.6654,up,0.4192,high,trending_up,bear,0.8833,0.2282,0.116,0.0,0.0,1.0,0.0,0.3675
+2026-08-18T21:48:54.935313,TSLA,335.607107,336.467693,0.2549,take-profit hit (0.27%),0.7082,up,0.1623,high,trending_down,neutral,0.9591,0.1075,0.116,0.0,0.0,1.0,0.0,0.4627
+2026-08-18T21:48:56.433615,TSLA,336.27224,336.9326,0.1949,take-profit hit (0.16%),0.6913,up,0.0111,low,choppy,neutral,0.8751,0.0647,0.116,0.0,0.0,1.0,0.0,0.5101
+2026-08-18T21:49:21.209006,TSLA,340.933172,341.571672,0.1858,take-profit hit (0.15%),0.6256,up,0.0468,low,trending_down,neutral,0.9968,0.0531,0.3899,0.0,0.0,1.0,0.0,0.4814

@@ -1,0 +1,44 @@
+{
+  "incident_dir": "C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\artifacts\\incident-20260817T050439Z",
+  "checked_at": "2026-08-17T05:08:41.856295Z",
+  "monitor_summary": {
+    "run_dir": "C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\artifacts\\20260817T050319Z",
+    "baseline_path": "C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\config\\baseline_metrics.json",
+    "baseline_metrics": {
+      "total_return_pct_mean": -0.014475000000009506,
+      "max_drawdown_pct_mean": -0.4866067510873675,
+      "win_rate_mean": 56.85339822855255
+    },
+    "current_metrics": {
+      "total_return_pct_mean": 0.0,
+      "max_drawdown_pct_mean": 0.0,
+      "win_rate_mean": 0.0
+    },
+    "incidents": [
+      {
+        "metric": "win_rate_mean",
+        "percent_drop": 100.0,
+        "threshold": 10.0
+      }
+    ],
+    "checked_at": "2026-08-17T05:04:39.136546Z"
+  },
+  "reproduce_attempts": [
+    {
+      "attempt": 1,
+      "returncode": 0
+    },
+    {
+      "attempt": 2,
+      "returncode": 0
+    },
+    {
+      "attempt": 3,
+      "returncode": 0
+    }
+  ],
+  "likely_causes": [
+    "unknown"
+  ],
+  "log_excerpt": "C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\scripts\\run_backtest.py:34: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\n  start = datetime.utcnow()\nC:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\scripts\\run_backtest.py:78: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\n  summary[\"end_time\"] = datetime.utcnow().isoformat() + \"Z\"\nC:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\scripts\\run_backtest.py:97: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\n  f.write(f\"{datetime.utcnow().isoformat()}Z RUN_BACKTEST commit={commit} branch={branch} ret={summary['returncode']} dir={run_dir}\\n\")\n{\"start_time\": \"2026-08-17T05:04:39.784216Z\", \"artifact_dir\": \"C:\\\\Users\\\\a1str\\\\OneDrive\\\\Desktop\\\\Trading bot\\\\artifacts\\\\20260817T050439Z\", \"end_time\": \"2026-08-17T05:05:58.591698Z\", \"returncode\": 0}\n\n\n---\n\nC:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\scripts\\run_backtest.py:34: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\n  start = datetime.utcnow()\nC:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\scripts\\run_backtest.py:78: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).\n  summary[\"end_time\"] = datetime.utcnow().isoformat() + \"Z\"\nC:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\scripts\\run_backtest.py:97: DeprecationWarning: datetime.da"
+}

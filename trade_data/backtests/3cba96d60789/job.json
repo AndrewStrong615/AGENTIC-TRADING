@@ -1,0 +1,19 @@
+{
+  "run_id": "3cba96d60789",
+  "status": "failed",
+  "current_symbol": "XOM",
+  "symbol_index": 6,
+  "total_symbols": 8,
+  "window_index": 1,
+  "total_windows": 1,
+  "iteration": 2,
+  "total_iterations": 3,
+  "progress": 62.5,
+  "elapsed_seconds": 1970.7243971824646,
+  "estimated_seconds": 2782.1175037832822,
+  "eta_seconds": 0.0,
+  "message": "Backtest failed.",
+  "error": "Traceback (most recent call last):\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 2481, in main\n    ) = simulate_symbol_iterations(\n        ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        symbol,\n        ^^^^^^^\n    ...<5 lines>...\n        symbol_number,\n        ^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 1874, in simulate_symbol_iterations\n    simulate_symbol(\n    ~~~~~~~~~~~~~~~^\n        symbol,\n        ^^^^^^^\n    ...<12 lines>...\n        iteration=it + 1,\n        ^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 1681, in simulate_symbol\n    write_live_data(\n    ~~~~~~~~~~~~~~~^\n        equity_curve=equity_curve,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        },\n        ^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 535, in write_live_data\n    atomic_json_write(\n    ~~~~~~~~~~~~~~~~~^\n        os.path.join(\n        ^^^^^^^^^^^^^\n    ...<3 lines>...\n        payload,\n        ^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 271, in atomic_json_write\n    os.replace(\n    ~~~~~~~~~~^\n        tmp,\n        ^^^^\n        path,\n        ^^^^^\n    )\n    ^\nPermissionError: [WinError 5] Access is denied: 'trade_data\\\\backtests\\\\3cba96d60789\\\\live.json.tmp' -> 'trade_data\\\\backtests\\\\3cba96d60789\\\\live.json'\n",
+  "completed": false,
+  "updated_at": "2026-08-19T03:11:16.965701Z"
+}

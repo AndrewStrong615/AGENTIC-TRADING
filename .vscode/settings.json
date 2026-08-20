@@ -1,3 +1,19 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system"
+  // Use the project's virtual environment for the Python extension
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+
+  // Help the language server find local packages/modules and venv site-packages
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}",
+    "${workspaceFolder}\\.venv\\Lib\\site-packages"
+  ],
+
+  // Keep basic type checking to avoid noisy diagnostics in this workspace
+  "python.analysis.typeCheckingMode": "basic",
+
+  // Use library code for types where available (helps resolve builtins and stdlib)
+  "python.analysis.useLibraryCodeForTypes": true,
+
+  // Preserve existing config for env manager if present
+  "python-envs.defaultEnvManager": "ms-python.python:system"
 }

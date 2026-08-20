@@ -44,7 +44,7 @@ import matplotlib.pyplot as plt
 from typing import Any, TYPE_CHECKING, cast
 
 try:
-    from typing import Any, TYPE_CHECKING, cast
+    from typing import Any, TYPE_CHECKING, cast, Dict, Optional
 
     try:
         import alpaca_trade_api as tradeapi
@@ -640,21 +640,21 @@ class BacktestRiskGate(RiskGate):
             trade_log_path=trade_log_path,
         )
 
-        self.cash = {
+        self.cash: Dict[str, float] = {
             s: STARTING_CASH_PER_SYMBOL
             for s in symbols
         }
 
-        self.trades = {
+        self.trades: Dict[str, list] = {
             s: []
             for s in symbols
         }
 
-        self.starting_equity = (
+        self.starting_equity: float = (
             STARTING_CASH_PER_SYMBOL
         )
 
-        self.entry_cost_per_share = {
+        self.entry_cost_per_share: Dict[str, Optional[float]] = {
             s: None
             for s in symbols
         }
@@ -729,7 +729,7 @@ class BacktestRiskGate(RiskGate):
                 ] = (
                     eff_price +
                     COMMISSION_PER_SHARE
-                )
+                )  # type: ignore[assignment]
 
 
         elif decision.action == "sell":

@@ -41,8 +41,15 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import alpaca_trade_api as tradeapi
-from alpaca_trade_api.rest import TimeFrame
+from typing import Any, TYPE_CHECKING, cast
+
+try:
+    import alpaca_trade_api as tradeapi
+    from alpaca_trade_api.rest import TimeFrame
+except Exception:
+    tradeapi = None  # type: Any
+    TimeFrame: Any = None
+
 
 from Tradingcore import (
     MarketDataLayer,
@@ -120,29 +127,25 @@ BASE_URL = os.environ.get(
 api = None
 
 try:
-
-    if API_KEY and SECRET_KEY:
-
-        api = tradeapi.REST(
-            API_KEY,
-            SECRET_KEY,
-            BASE_URL,
-            api_version="v2",
-        )
-
+    if API_KEY and SECRET_KEY and 'tradeapi' in globals() and tradeapi is not None:
+        try:
+            api = tradeapi.REST(
+                API_KEY,
+                SECRET_KEY,
+                cast(Any, BASE_URL),
+                api_version="v2",
+            )
+        except Exception as e:
+            print(f"[autofix] Failed to initialize Alpaca REST client: {e}")
+            api = None
     else:
-
         print(
-            "[autofix] ALPACA credentials not found; "
+            "[autofix] ALPACA credentials not found or Alpaca SDK unavailable; "
             "running in fallback mode (yfinance/synthetic)."
         )
 
 except Exception as e:
-
-    print(
-        f"[autofix] Failed to initialize Alpaca API: {e}"
-    )
-
+    print(f"[autofix] Failed to initialize Alpaca API: {e}")
     api = None
 
 
@@ -663,6 +666,9 @@ class BacktestRiskGate(RiskGate):
         if not decision.approved:
             return
 
+        # Normalize qty to an integer to avoid Optional[int] arithmetic warnings
+        qty = int(decision.qty or 0)
+
         slippage_frac = (
             SLIPPAGE_PCT /
             100.0
@@ -680,11 +686,11 @@ class BacktestRiskGate(RiskGate):
 
             commission = (
                 COMMISSION_PER_SHARE *
-                decision.qty
+                qty
             )
 
             cost = (
-                decision.qty *
+                qty *
                 eff_price
                 +
                 commission
@@ -699,7 +705,7 @@ class BacktestRiskGate(RiskGate):
 
                 self.current_positions[
                     symbol
-                ] += decision.qty
+                ] += qty
 
                 self.entry_prices[
                     symbol
@@ -725,11 +731,11 @@ class BacktestRiskGate(RiskGate):
 
             commission = (
                 COMMISSION_PER_SHARE *
-                decision.qty
+                            qty
             )
 
             proceeds = (
-                decision.qty *
+                            qty *
                 eff_price
                 -
                 commission
@@ -793,7 +799,7 @@ class BacktestRiskGate(RiskGate):
                     0,
                     self.current_positions[
                         symbol
-                    ] - decision.qty,
+                                        ] - qty,
                 )
 
                 if (
@@ -1091,14 +1097,17 @@ def fetch_bars(
 
     if api is None:
 
+        # yfinance optional — prefer top-level guarded import if available
         try:
+            import yfinance as yf  # type: ignore
+        except Exception:
+            yf = None  # type: Any
 
-            import yfinance as yf
+                    try:
+                        if yf is None:
+                            raise ImportError('yfinance not installed')
 
-            try:
-
-                df = yf.download(
-                    symbol,
+                        df = yf.download(                    symbol,
                     start=start.strftime(
                         "%Y-%m-%d"
                     ),
@@ -1115,69 +1124,69 @@ def fetch_bars(
 
             if not df.empty:
 
-                if isinstance(
-                    df.columns,
-                    pd.MultiIndex,
-                ):
+                                if isinstance(
+                                    df.columns,
+                                    pd.MultiIndex,
+                                ):
 
-                    df.columns = [
-                        c[0]
-                        for c in df.columns
-                    ]
+                                    df.columns = [
+                                        c[0]
+                                        for c in df.columns
+                                    ]
 
-                cols = {
-                    c: c.lower()
-                    for c in df.columns
-                }
+                                cols = {
+                                    c: c.lower()
+                                    for c in df.columns
+                                }
 
-                df = df.rename(
-                    columns=cols
-                )
+                                df = df.rename(
+                                    columns=cols
+                                )
 
-                required = [
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "volume",
-                ]
+                                required = [
+                                    "open",
+                                    "high",
+                                    "low",
+                                    "close",
+                                    "volume",
+                                ]
 
-                if all(
-                    c in df.columns
-                    for c in required
-                ):
+                                if all(
+                                    c in df.columns
+                                    for c in required
+                                ):
 
-                    df.index = (
-                        pd.DatetimeIndex(
-                            df.index
-                        )
-                    )
+                                    df.index = (
+                                        pd.DatetimeIndex(
+                                            df.index
+                                        )
+                                    )
 
-                    return df[
-                        required
-                    ]
+                                    return df[
+                                        required
+                                    ]
 
-            print(
-                f"  yfinance returned no minute bars "
-                f"for {symbol}; falling back to synthetic data."
-            )
+                            print(
+                                f"  yfinance returned no minute bars "
+                                f"for {symbol}; falling back to synthetic data."
+                            )
 
-        except ImportError:
+                        except ImportError:
 
-            print(
-                "  yfinance not installed; "
-                "falling back to synthetic data."
-            )
+                            print(
+                                "  yfinance not installed; "
+                                "falling back to synthetic data."
+                            )
 
-        except Exception as e:
+                        except Exception as e:
 
-            print(
-                f"  yfinance fetch failed for "
-                f"{symbol}: {e}; "
-                f"falling back to synthetic data."
-            )
+                            print(
+                                f"  yfinance fetch failed for "
+                                f"{symbol}: {e}; "
+                                f"falling back to synthetic data."
+                            )
 
-        rng = pd.date_range(
+                        rng = pd.date_range(
             start=start,
             end=end,
             freq="1min",
@@ -1243,27 +1252,30 @@ def fetch_bars(
 
         except Exception as e:
 
-            last_error = e
+                        last_error = e
 
-            if attempt < max_retries:
+                        if attempt < max_retries:
 
-                wait = 2 ** attempt
+                            wait = 2 ** attempt
 
-                print(
-                    f"  {symbol}: bars fetch failed "
-                    f"({e.__class__.__name__}), "
-                    f"retrying in {wait}s..."
-                )
-                notify_error(
-                    f"Backtest failed (Run ID: {RUN_ID})",
-                    e,
-)
+                            print(
+                                f"  {symbol}: bars fetch failed "
+                                f"({e.__class__.__name__}), "
+                                f"retrying in {wait}s..."
+                            )
+                            notify_error(
+                                f"Backtest failed (Run ID: {RUN_ID})",
+                                e,
+                            )
 
-                time.sleep(
-                    wait
-                )
+                            time.sleep(
+                                wait
+                            )
 
-    raise last_error
+            if last_error is not None:
+                raise last_error
+            else:
+                raise RuntimeError("fetch_bars failed without capturing an exception")
 
 
 # ============================================================================

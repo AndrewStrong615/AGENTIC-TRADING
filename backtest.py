@@ -44,8 +44,21 @@ import matplotlib.pyplot as plt
 from typing import Any, TYPE_CHECKING, cast
 
 try:
-    import alpaca_trade_api as tradeapi
-    from alpaca_trade_api.rest import TimeFrame
+    from typing import Any, TYPE_CHECKING, cast
+
+    try:
+        import alpaca_trade_api as tradeapi
+        from alpaca_trade_api.rest import TimeFrame
+    except Exception:
+        tradeapi = None  # type: Any
+        TimeFrame: Any = None
+
+    # yfinance optional import
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception:
+        yf = None  # type: Any
+
 except Exception:
     tradeapi = None  # type: Any
     TimeFrame: Any = None
@@ -1097,96 +1110,42 @@ def fetch_bars(
 
     if api is None:
 
-        # yfinance optional — prefer top-level guarded import if available
         try:
-            import yfinance as yf  # type: ignore
-        except Exception:
-            yf = None  # type: Any
-
-                    try:
                         if yf is None:
                             raise ImportError('yfinance not installed')
 
-                        df = yf.download(                    symbol,
-                    start=start.strftime(
-                        "%Y-%m-%d"
-                    ),
-                    end=end.strftime(
-                        "%Y-%m-%d"
-                    ),
-                    interval="1m",
-                    progress=False,
-                )
-
-            except Exception:
-
-                df = pd.DataFrame()
-
-            if not df.empty:
-
-                                if isinstance(
-                                    df.columns,
-                                    pd.MultiIndex,
-                                ):
-
-                                    df.columns = [
-                                        c[0]
-                                        for c in df.columns
-                                    ]
-
-                                cols = {
-                                    c: c.lower()
-                                    for c in df.columns
-                                }
-
-                                df = df.rename(
-                                    columns=cols
-                                )
-
-                                required = [
-                                    "open",
-                                    "high",
-                                    "low",
-                                    "close",
-                                    "volume",
-                                ]
-
-                                if all(
-                                    c in df.columns
-                                    for c in required
-                                ):
-
-                                    df.index = (
-                                        pd.DatetimeIndex(
-                                            df.index
-                                        )
-                                    )
-
-                                    return df[
-                                        required
-                                    ]
-
-                            print(
-                                f"  yfinance returned no minute bars "
-                                f"for {symbol}; falling back to synthetic data."
+                        try:
+                            df = yf.download(
+                                symbol,
+                                start=start.strftime("%Y-%m-%d"),
+                                end=end.strftime("%Y-%m-%d"),
+                                interval="1m",
+                                progress=False,
                             )
+                        except Exception:
+                            df = pd.DataFrame()
 
-                        except ImportError:
+                        if not df.empty:
+                            if isinstance(df.columns, pd.MultiIndex):
+                                df.columns = [c[0] for c in df.columns]
 
-                            print(
-                                "  yfinance not installed; "
-                                "falling back to synthetic data."
-                            )
+                            cols = {c: c.lower() for c in df.columns}
+                            df = df.rename(columns=cols)
 
-                        except Exception as e:
+                            required = ["open", "high", "low", "close", "volume"]
+                            if all(c in df.columns for c in required):
+                                df.index = pd.DatetimeIndex(df.index)
+                                return df[required]
 
-                            print(
-                                f"  yfinance fetch failed for "
-                                f"{symbol}: {e}; "
-                                f"falling back to synthetic data."
-                            )
+                        print(f"  yfinance returned no minute bars for {symbol}; falling back to synthetic data.")
 
-                        rng = pd.date_range(
+        except ImportError:
+                        print("  yfinance not installed; falling back to synthetic data.")
+
+        except Exception as e:
+                        print(f"  yfinance fetch failed for {symbol}: {e}; falling back to synthetic data.")
+
+        rng = pd.date_range(
             start=start,
             end=end,
             freq="1min",
@@ -1251,31 +1210,17 @@ def fetch_bars(
             return df
 
         except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                wait = 2 ** attempt
+                print(f"  {symbol}: bars fetch failed ({e.__class__.__name__}), retrying in {wait}s...")
+                notify_error(f"Backtest failed (Run ID: {RUN_ID})", e)
+                time.sleep(wait)
 
-                        last_error = e
-
-                        if attempt < max_retries:
-
-                            wait = 2 ** attempt
-
-                            print(
-                                f"  {symbol}: bars fetch failed "
-                                f"({e.__class__.__name__}), "
-                                f"retrying in {wait}s..."
-                            )
-                            notify_error(
-                                f"Backtest failed (Run ID: {RUN_ID})",
-                                e,
-                            )
-
-                            time.sleep(
-                                wait
-                            )
-
-            if last_error is not None:
-                raise last_error
-            else:
-                raise RuntimeError("fetch_bars failed without capturing an exception")
+    if last_error is not None:
+        raise last_error
+    else:
+        raise RuntimeError("fetch_bars failed without capturing an exception")
 
 
 # ============================================================================

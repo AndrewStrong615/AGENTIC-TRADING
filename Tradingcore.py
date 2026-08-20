@@ -24,7 +24,7 @@ from dataclasses import dataclass, replace
 from collections import deque
 from datetime import datetime, timezone, timedelta
 from notifications import notify_order_placed
-from typing import Optional
+from typing import Optional, Dict
 
 import numpy as np
 from sklearn.linear_model import LinearRegression, SGDClassifier
@@ -630,12 +630,12 @@ class RiskGate:
         self.symbols = symbols
         self.api = api_client
         self.positions_lock = threading.Lock()
-        self.current_positions = {s: 0 for s in symbols}
-        self.entry_prices = {s: None for s in symbols}
-        self.entry_stop_pct = {s: None for s in symbols}
-        self.entry_target_pct = {s: None for s in symbols}
-        self.entry_signal_context = {s: None for s in symbols}
-        self.last_order_time = {s: 0.0 for s in symbols}
+        self.current_positions: Dict[str, int] = {s: 0 for s in symbols}
+        self.entry_prices: Dict[str, Optional[float]] = {s: None for s in symbols}
+        self.entry_stop_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
+        self.entry_target_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
+        self.entry_signal_context: Dict[str, Optional[TradeSignal]] = {s: None for s in symbols}
+        self.last_order_time: Dict[str, float] = {s: 0.0 for s in symbols}
         self.trading_halted = False
         self.starting_equity = None
         self.state_lock = threading.Lock()

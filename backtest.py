@@ -69,6 +69,7 @@ from Tradingcore import (
     SignalLayer,
     RiskGate,
     GateDecision,
+    TradeSignal,
 )
 from meta_filter import MetaModelFilter
 
@@ -659,6 +660,15 @@ class BacktestRiskGate(RiskGate):
             for s in symbols
         }
 
+        # Re-declare and initialize commonly used mappings with explicit
+        # typing so static analyzers (Pylance) understand these dicts hold
+        # Optional[float] values rather than being None-only.
+        self.current_positions: Dict[str, int] = {s: 0 for s in symbols}
+        self.entry_prices: Dict[str, Optional[float]] = {s: None for s in symbols}
+        self.entry_stop_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
+        self.entry_target_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
+        self.entry_signal_context: Dict[str, Optional[TradeSignal]] = {s: None for s in symbols}
+        self.last_order_time: Dict[str, float] = {s: 0.0 for s in symbols}
 
     def refresh_positions(self):
         pass

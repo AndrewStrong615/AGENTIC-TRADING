@@ -1,19 +1,19 @@
 {
-  "run_id": "8d6003fc9904",
+  "run_id": "a71287c2b0fa",
   "status": "failed",
   "current_symbol": "AAPL",
-  "symbol_index": 0,
+  "symbol_index": 1,
   "total_symbols": 8,
   "window_index": 1,
   "total_windows": 4,
-  "iteration": 0,
+  "iteration": 1,
   "total_iterations": 4,
   "progress": 0.0,
-  "elapsed_seconds": 0.09339618682861328,
-  "estimated_seconds": 0.0,
+  "elapsed_seconds": 21.99176549911499,
+  "estimated_seconds": 24895.33140421884,
   "eta_seconds": 0.0,
   "message": "Backtest failed.",
-  "error": "Traceback (most recent call last):\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 2422, in main\n    update_progress(\n    ~~~~~~~~~~~~~~~^\n        completed_units,\n        ^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n        progress_message,\n        ^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 595, in update_progress\n    update_job(\n    ~~~~~~~~~~^\n        status=\"running\",\n        ^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        completed=False,\n        ^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 445, in update_job\n    atomic_json_write(\n    ~~~~~~~~~~~~~~~~~^\n        JOB_STATE_PATH,\n        ^^^^^^^^^^^^^^^\n        state,\n        ^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 271, in atomic_json_write\n    os.replace(\n    ~~~~~~~~~~^\n        tmp,\n        ^^^^\n        path,\n        ^^^^^\n    )\n    ^\nPermissionError: [WinError 5] Access is denied: 'trade_data\\\\backtest_job.json.tmp' -> 'trade_data\\\\backtest_job.json'\n",
+  "error": "Traceback (most recent call last):\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 2458, in main\n    ) = simulate_symbol_iterations(\n        ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        symbol,\n        ^^^^^^^\n    ...<5 lines>...\n        symbol_number,\n        ^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 1851, in simulate_symbol_iterations\n    simulate_symbol(\n    ~~~~~~~~~~~~~~~^\n        symbol,\n        ^^^^^^^\n    ...<12 lines>...\n        iteration=it + 1,\n        ^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 1658, in simulate_symbol\n    write_live_data(\n    ~~~~~~~~~~~~~~~^\n        equity_curve=equity_curve,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        },\n        ^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 552, in write_live_data\n    atomic_json_write(\n    ~~~~~~~~~~~~~~~~~^\n        os.path.join(\n        ^^^^^^^^^^^^^\n    ...<3 lines>...\n        payload,\n        ^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\a1str\\OneDrive\\Desktop\\Trading bot\\backtest.py\", line 288, in atomic_json_write\n    os.replace(\n    ~~~~~~~~~~^\n        tmp,\n        ^^^^\n        path,\n        ^^^^^\n    )\n    ^\nPermissionError: [WinError 5] Access is denied: 'trade_data\\\\backtests\\\\a71287c2b0fa\\\\live.json.tmp' -> 'trade_data\\\\backtests\\\\a71287c2b0fa\\\\live.json'\n",
   "completed": false,
-  "updated_at": "2026-08-20T00:52:50.918752Z"
+  "updated_at": "2026-08-20T03:03:02.429145Z"
 }

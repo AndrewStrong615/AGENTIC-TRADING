@@ -30,6 +30,7 @@ import csv
 import traceback
 import uuid
 import shutil
+import glob
 from datetime import datetime, timedelta, timezone
 from notifications import notify_error
 socket.setdefaulttimeout(20)
@@ -270,25 +271,123 @@ def utc_now():
 
 def atomic_json_write(path, data):
 
-    tmp = path + ".tmp"
+    # Ensure parent folder exists
+    parent = os.path.dirname(path)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception:
+            # If we cannot create the directory, there's nothing we can do here
+            log.warning("atomic_json_write: failed to ensure parent directory %s", parent)
+            return
 
-    with open(
-        tmp,
-        "w",
-        encoding="utf-8",
-    ) as f:
+    # Cleanup old temp files left by previous runs in the same directory.
+    # Only remove files older than CLEANUP_AGE_SECONDS to avoid racing with
+    # other active processes. This keeps trade_data tidy when the dashboard
+    # repeatedly locks the live files.
+    CLEANUP_AGE_SECONDS = 300  # 5 minutes
+    try:
+        now_ts = time.time()
+        for pattern in ("*.tmp.*", "*.tmp"):
+            for fname in glob.glob(os.path.join(parent, pattern)):
+                try:
+                    if now_ts - os.path.getmtime(fname) > CLEANUP_AGE_SECONDS:
+                        os.remove(fname)
+                except Exception:
+                    # Ignore any issues inspecting/removing individual files
+                    pass
+    except Exception:
+        # Non-fatal cleanup errors should not stop the backtest
+        pass
 
-        json.dump(
-            data,
-            f,
-            indent=2,
-            default=str,
+    # Use a unique temp filename to avoid clashing with other writers that
+    # may hold a handle to a .tmp file (Windows tends to lock files).*
+    unique_tmp = f"{path}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+
+    try:
+        with open(unique_tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+    except PermissionError:
+        # Could not create the tmp file (likely a lock or permission issue).
+        log.warning(
+            "atomic_json_write: cannot write temp file %s (PermissionError); skipping live update",
+            unique_tmp,
         )
+        return
+    except Exception:
+        # Unexpected error while writing tmp; ensure cleanup then re-raise
+        try:
+            os.remove(unique_tmp)
+        except Exception:
+            pass
+        raise
 
-    os.replace(
-        tmp,
+    # Try replacing atomically with retries (helps with transient locks).
+    replace_attempts = 5
+    backoff = 0.1
+    replaced = False
+    for attempt in range(replace_attempts):
+        try:
+            os.replace(unique_tmp, path)
+            replaced = True
+            break
+        except PermissionError:
+            log.debug("atomic_json_write: os.replace attempt %d failed (PermissionError); retrying in %.2fs", attempt + 1, backoff)
+            time.sleep(backoff)
+            backoff *= 2
+        except Exception:
+            # Unexpected error — cleanup tmp and re-raise
+            try:
+                os.remove(unique_tmp)
+            except Exception:
+                pass
+            raise
+
+    if replaced:
+        return
+
+    # If replace never succeeded, try direct write with retries.
+    log.warning(
+        "atomic_json_write: os.replace failed after %d attempts; destination %s may be locked — attempting direct write with retries",
+        replace_attempts,
         path,
     )
+
+    write_attempts = 4
+    backoff = 0.1
+    written = False
+    for attempt in range(write_attempts):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, default=str)
+            written = True
+            break
+        except PermissionError:
+            log.debug("atomic_json_write: direct write attempt %d failed (PermissionError); retrying in %.2fs", attempt + 1, backoff)
+            time.sleep(backoff)
+            backoff *= 2
+        except Exception:
+            # Unexpected error — cleanup tmp and re-raise
+            try:
+                os.remove(unique_tmp)
+            except Exception:
+                pass
+            raise
+
+    if written:
+        try:
+            os.remove(unique_tmp)
+        except Exception:
+            pass
+        return
+
+    # If we reach here, both atomic replace and direct writes failed after retries.
+    log.warning(
+        "atomic_json_write: all attempts to write %s failed (file likely locked); leaving temp file %s for inspection and continuing",
+        path,
+        unique_tmp,
+    )
+    return
 
 
 def update_job(
@@ -549,6 +648,8 @@ def write_live_data(
         payload,
     )
 
+    # Also write to the per-run live file so the dashboard can read the latest
+    # update even if the shared LIVE_DATA_PATH is locked by another process.
     atomic_json_write(
         os.path.join(
             RUN_DIR,

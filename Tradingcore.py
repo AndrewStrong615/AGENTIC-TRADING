@@ -20,6 +20,7 @@ import logging
 import csv
 import os
 import json
+import uuid
 from dataclasses import dataclass, replace
 from collections import deque
 from datetime import datetime, timezone, timedelta
@@ -850,6 +851,27 @@ class RiskGate:
             # know when an order has actually been sent from the system.
             try:
                 notify_order_placed(symbol, decision.action, decision.qty, price, decision.reason)
+            except Exception:
+                pass
+
+            # Also write a small per-order JSON file into the same data folder so
+            # dashboards/watchers that avoid reading a single locked file can
+            # pick up this event reliably. This is a best-effort, non-blocking
+            # write — failures are ignored so live trading is not disrupted.
+            try:
+                orders_dir = os.path.join(os.path.dirname(self.trade_log_path) or '.', 'orders')
+                os.makedirs(orders_dir, exist_ok=True)
+                order_payload = {
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'symbol': symbol,
+                    'action': decision.action,
+                    'qty': decision.qty,
+                    'price': price,
+                    'reason': decision.reason,
+                }
+                order_fname = os.path.join(orders_dir, f"{int(time.time())}_{uuid.uuid4().hex}.json")
+                with open(order_fname, 'w', encoding='utf-8') as of:
+                    json.dump(order_payload, of, default=str)
             except Exception:
                 pass
 

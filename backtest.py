@@ -79,7 +79,12 @@ from meta_filter import MetaModelFilter
 # DIRECTORIES / FILES
 # ============================================================================
 
-DATA_DIR = "trade_data"
+# Always resolve project data relative to this file, not the shell's current
+# working directory. This keeps credentials.json and backtest artifacts in
+# the same project folder whether backtest.py is launched directly or by the
+# dashboard.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "trade_data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 BACKTEST_RUNS_DIR = os.path.join(DATA_DIR, "backtests")
@@ -126,17 +131,47 @@ log = logging.getLogger("backtest")
 # ALPACA
 # ============================================================================
 
-API_KEY = os.environ.get(
-    "ALPACA_API_KEY"
-)
+# Prefer the persistent credentials_store.py on disk. This is important when
+# backtest.py is launched directly: direct launches do not inherit the
+# dashboard process's freshly-built environment.
+#
+# Environment variables remain as a fallback for older setups, but saved
+# credentials from credentials_store.py take precedence when present.
+try:
+    from credentials_store import load_credentials
+except Exception:
+    load_credentials = None
 
-SECRET_KEY = os.environ.get(
-    "ALPACA_SECRET_KEY"
-)
+_saved_credentials = {}
+if load_credentials is not None:
+    try:
+        _saved_credentials = load_credentials() or {}
+    except Exception:
+        _saved_credentials = {}
 
-BASE_URL = os.environ.get(
-    "ALPACA_BASE_URL",
-    "https://paper-api.alpaca.markets",
+API_KEY = (
+    _saved_credentials.get("alpaca_api_key")
+    or os.environ.get("ALPACA_API_KEY", "")
+).strip()
+
+SECRET_KEY = (
+    _saved_credentials.get("alpaca_secret_key")
+    or os.environ.get("ALPACA_SECRET_KEY", "")
+).strip()
+
+BASE_URL = (
+    _saved_credentials.get("alpaca_base_url")
+    or os.environ.get(
+        "ALPACA_BASE_URL",
+        "https://paper-api.alpaca.markets",
+    )
+).strip()
+
+print(
+    "[alpaca] credentials loaded: "
+    f"api_key={'yes' if API_KEY else 'no'}, "
+    f"secret_key={'yes' if SECRET_KEY else 'no'}, "
+    f"base_url={BASE_URL}"
 )
 
 api = None
@@ -210,6 +245,54 @@ COMMISSION_PER_SHARE = 0.005
 SLIPPAGE_PCT = 0.02
 
 
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _env_list(name, default):
+    raw = os.environ.get(name)
+    if not raw:
+        return list(default)
+    return [x.strip() for x in raw.split(',') if x.strip()]
+
+
+# Strategy/risk controls. These are intentionally external to Tradingcore.py
+# so the existing signal engine can be evaluated without rewriting it.
+BAR_TIMEFRAME = os.environ.get("BAR_TIMEFRAME", "1m").lower().strip()
+MIN_SIGNAL_CONFIDENCE = _env_float("MIN_SIGNAL_CONFIDENCE", 0.0)
+MIN_META_WIN_PROB = _env_float("MIN_META_WIN_PROB", 0.0)
+MIN_ATR_PCT = _env_float("MIN_ATR_PCT", 0.0)
+MAX_ATR_PCT = _env_float("MAX_ATR_PCT", 1_000.0)
+MIN_TREND_CHANGE_PCT = _env_float("MIN_TREND_CHANGE_PCT", 0.0)
+MIN_BARS_BETWEEN_TRADES = _env_int("MIN_BARS_BETWEEN_TRADES", 0)
+
+# Position/risk controls. RISK_PER_TRADE_PCT is the fraction of current equity
+# allowed to be lost if the configured stop is hit. MAX_POSITION_PCT caps
+# gross capital allocated to one symbol.
+RISK_PER_TRADE_PCT = _env_float("RISK_PER_TRADE_PCT", 0.005)
+MAX_POSITION_PCT = _env_float("MAX_POSITION_PCT", 0.20)
+STOP_LOSS_PCT = _env_float("STOP_LOSS_PCT", 1.0)
+TAKE_PROFIT_PCT = _env_float("TAKE_PROFIT_PCT", 2.0)
+TRAIL_STOP_PCT = _env_float("TRAIL_STOP_PCT", 0.0)
+ATR_STOP_MULTIPLIER = _env_float("ATR_STOP_MULTIPLIER", 0.0)
+
+if STOP_LOSS_PCT <= 0:
+    STOP_LOSS_PCT = 1.0
+if RISK_PER_TRADE_PCT < 0:
+    RISK_PER_TRADE_PCT = 0.0
+MAX_POSITION_PCT = max(0.01, min(MAX_POSITION_PCT, 1.0))
+
+
 # ============================================================================
 # FAST MODE
 # ============================================================================
@@ -244,6 +327,17 @@ if FAST_BACKTEST:
     RETRAIN_EVERY_N_BARS = 50
     STARTING_CASH_PER_SYMBOL = 5_000.0
     SLEEP_BETWEEN_SYMBOLS = 0.1
+
+# Explicit environment overrides are useful for optimizer experiments and
+# preserve the normal defaults when the variables are absent.
+SYMBOLS = _env_list("BACKTEST_SYMBOLS", SYMBOLS)
+WINDOW_LENGTH_DAYS = _env_int("WINDOW_LENGTH_DAYS", WINDOW_LENGTH_DAYS)
+NUM_WINDOWS = _env_int("NUM_WINDOWS", NUM_WINDOWS)
+ITERATIONS_PER_WINDOW = _env_int("ITERATIONS_PER_WINDOW", ITERATIONS_PER_WINDOW)
+RETRAIN_EVERY_N_BARS = _env_int("RETRAIN_EVERY_N_BARS", RETRAIN_EVERY_N_BARS)
+STARTING_CASH_PER_SYMBOL = _env_float("STARTING_CASH_PER_SYMBOL", STARTING_CASH_PER_SYMBOL)
+SLEEP_BETWEEN_SYMBOLS = _env_float("SLEEP_BETWEEN_SYMBOLS", SLEEP_BETWEEN_SYMBOLS)
+BACKTEST_END_OFFSET_DAYS = _env_int("BACKTEST_END_OFFSET_DAYS", 0)
 
 
 # ============================================================================
@@ -770,6 +864,7 @@ class BacktestRiskGate(RiskGate):
         self.entry_target_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
         self.entry_signal_context: Dict[str, Optional[TradeSignal]] = {s: None for s in symbols}
         self.last_order_time: Dict[str, float] = {s: 0.0 for s in symbols}
+        self.peak_prices: Dict[str, Optional[float]] = {s: None for s in symbols}
 
     def refresh_positions(self):
         pass
@@ -792,6 +887,16 @@ class BacktestRiskGate(RiskGate):
 
         # Normalize qty to an integer to avoid Optional[int] arithmetic warnings
         qty = int(decision.qty or 0)
+
+        if decision.action == "buy" and qty > 0:
+            # Enforce a hard gross-position cap regardless of the underlying
+            # RiskGate sizing formula.
+            max_cost = self.equity(symbol, price) * MAX_POSITION_PCT
+            per_share_cost = price * (1.0 + SLIPPAGE_PCT / 100.0) + COMMISSION_PER_SHARE
+            if per_share_cost > 0:
+                qty = min(qty, int(max_cost / per_share_cost))
+        if qty <= 0:
+            return
 
         slippage_frac = (
             SLIPPAGE_PCT /
@@ -841,6 +946,7 @@ class BacktestRiskGate(RiskGate):
                     eff_price +
                     COMMISSION_PER_SHARE
                 )  # type: ignore[assignment]
+                self.peak_prices[symbol] = eff_price
 
 
         elif decision.action == "sell":
@@ -951,6 +1057,7 @@ class BacktestRiskGate(RiskGate):
                     self.entry_signal_context[
                         symbol
                     ] = None
+                    self.peak_prices[symbol] = None
 
 
     def equity(
@@ -1199,6 +1306,43 @@ def load_persisted_weights(
 # MARKET DATA
 # ============================================================================
 
+def _alpaca_timeframe():
+    """Map BAR_TIMEFRAME to the legacy alpaca_trade_api TimeFrame object."""
+    mapping = {
+        "1m": getattr(TimeFrame, "Minute", None),
+        "5m": None,
+        "15m": None,
+        "30m": None,
+        "1h": getattr(TimeFrame, "Hour", None),
+        "1d": getattr(TimeFrame, "Day", None),
+    }
+    if BAR_TIMEFRAME == "1m":
+        return mapping["1m"]
+    if BAR_TIMEFRAME == "1h":
+        return mapping["1h"]
+    if BAR_TIMEFRAME == "1d":
+        return mapping["1d"]
+    # Some alpaca_trade_api versions do not expose a public constructor for
+    # arbitrary minute counts. Try it when available; otherwise fail clearly.
+    try:
+        from alpaca_trade_api.rest import TimeFrameUnit
+        mins = int(BAR_TIMEFRAME[:-1])
+        return TimeFrame(mins, TimeFrameUnit.Minute)
+    except Exception as e:
+        raise ValueError(
+            f"Unsupported BAR_TIMEFRAME={BAR_TIMEFRAME!r} for installed "
+            f"alpaca_trade_api: {e}"
+        )
+
+
+def _bar_interval_minutes():
+    if BAR_TIMEFRAME.endswith("m"):
+        return max(1, int(BAR_TIMEFRAME[:-1]))
+    if BAR_TIMEFRAME.endswith("h"):
+        return max(1, int(BAR_TIMEFRAME[:-1]) * 60)
+    return 24 * 60
+
+
 def fetch_bars(
     symbol,
     days,
@@ -1230,7 +1374,7 @@ def fetch_bars(
                                 symbol,
                                 start=start.strftime("%Y-%m-%d"),
                                 end=end.strftime("%Y-%m-%d"),
-                                interval="1m",
+                                interval=("1m" if BAR_TIMEFRAME == "1m" else BAR_TIMEFRAME),
                                 progress=False,
                             )
                         except Exception:
@@ -1259,7 +1403,7 @@ def fetch_bars(
         rng = pd.date_range(
             start=start,
             end=end,
-            freq="1min",
+            freq=f"{_bar_interval_minutes()}min",
         )
 
         n = len(rng)
@@ -1301,7 +1445,7 @@ def fetch_bars(
 
             df = api.get_bars(
                 symbol,
-                TimeFrame.Minute,
+                _alpaca_timeframe(),
                 start.strftime(
                     "%Y-%m-%d"
                 ),
@@ -1561,6 +1705,81 @@ def build_live_spy_curve(
 
 
 # ============================================================================
+# STRATEGY FILTERS / RISK SIZING
+# ============================================================================
+
+def _signal_value(signal, name, default=None):
+    try:
+        value = getattr(signal, name, default)
+        return default if value is None else float(value) if isinstance(value, (int, float, np.number)) else value
+    except Exception:
+        return default
+
+
+def _signal_allowed(signal):
+    confidence = _signal_value(signal, "confidence", 0.0) or 0.0
+    meta_prob = _signal_value(signal, "meta_win_prob", 0.0) or 0.0
+    atr_pct = _signal_value(signal, "atr_pct", 0.0) or 0.0
+    trend_change = abs(_signal_value(signal, "trend_change_pct", 0.0) or 0.0)
+
+    return (
+        confidence >= MIN_SIGNAL_CONFIDENCE
+        and meta_prob >= MIN_META_WIN_PROB
+        and atr_pct >= MIN_ATR_PCT
+        and atr_pct <= MAX_ATR_PCT
+        and trend_change >= MIN_TREND_CHANGE_PCT
+    )
+
+
+def _risk_adjusted_qty(risk_gate, symbol, price, signal, decision):
+    if not decision.approved or decision.action != "buy":
+        return decision
+
+    try:
+        equity = max(0.0, float(risk_gate.equity(symbol, price)))
+        if equity <= 0 or price <= 0:
+            return decision
+
+        # ATR-aware stop widens automatically during volatile regimes.
+        atr_pct = _signal_value(signal, "atr_pct", 0.0) or 0.0
+        stop_pct = max(STOP_LOSS_PCT, atr_pct * ATR_STOP_MULTIPLIER if ATR_STOP_MULTIPLIER > 0 else 0.0)
+        stop_fraction = max(stop_pct / 100.0, 0.0001)
+
+        risk_budget = equity * RISK_PER_TRADE_PCT
+        qty_by_risk = int(risk_budget / (price * stop_fraction)) if risk_budget > 0 else int(decision.qty or 0)
+        qty_by_position = int((equity * MAX_POSITION_PCT) / price)
+
+        capped_qty = min(int(decision.qty or 0), qty_by_risk if qty_by_risk > 0 else int(decision.qty or 0), qty_by_position)
+        decision.qty = max(0, capped_qty)
+        return decision
+    except Exception:
+        return decision
+
+
+def _check_exit(risk_gate, symbol, price, bar_index):
+    held = int(risk_gate.current_positions.get(symbol, 0))
+    entry = risk_gate.entry_prices.get(symbol)
+    if held <= 0 or entry is None or entry <= 0:
+        return None
+
+    # Fixed stop / take-profit.
+    if STOP_LOSS_PCT > 0 and price <= entry * (1.0 - STOP_LOSS_PCT / 100.0):
+        return GateDecision(True, "sell", held, "hard stop")
+    if TAKE_PROFIT_PCT > 0 and price >= entry * (1.0 + TAKE_PROFIT_PCT / 100.0):
+        return GateDecision(True, "sell", held, "take profit")
+
+    # Optional trailing stop based on the highest close since entry.
+    if TRAIL_STOP_PCT > 0:
+        peak = risk_gate.peak_prices.get(symbol) or entry
+        peak = max(peak, price)
+        risk_gate.peak_prices[symbol] = peak
+        if price <= peak * (1.0 - TRAIL_STOP_PCT / 100.0):
+            return GateDecision(True, "sell", held, "trailing stop")
+
+    return None
+
+
+# ============================================================================
 # SINGLE SYMBOL SIMULATION
 # ============================================================================
 
@@ -1697,11 +1916,28 @@ def simulate_symbol(
             dates[i].isoformat()
         )
 
+        # Risk exits are evaluated before new entries.
+        exit_decision = _check_exit(
+            risk_gate, symbol, current_price, i
+        )
+        if exit_decision is not None:
+            risk_gate.execute(
+                exit_decision, symbol, current_price, bar_index=i
+            )
+
         signal = (
             signal_layer.generate(
                 symbol
             )
         )
+
+        if signal is not None and _signal_allowed(signal):
+
+            if (
+                MIN_BARS_BETWEEN_TRADES > 0
+                and (i - int(risk_gate.last_order_time.get(symbol, 0))) < MIN_BARS_BETWEEN_TRADES
+            ):
+                signal = None
 
         if signal is not None:
 
@@ -1716,6 +1952,13 @@ def simulate_symbol(
                     now=bar_time,
                 )
             )
+
+            decision = _risk_adjusted_qty(
+                risk_gate, symbol, current_price, signal, decision
+            )
+
+            if decision.approved and decision.qty:
+                risk_gate.last_order_time[symbol] = i
 
             risk_gate.execute(
                 decision,
@@ -1810,100 +2053,59 @@ def compute_metrics(
     trades,
 ):
 
-    equity = np.array(
-        equity_curve
-    )
+    equity = np.asarray(equity_curve, dtype=float)
+    if equity.size == 0:
+        return {}
 
-    total_return_pct = (
-        (
-            equity[-1] -
-            STARTING_CASH_PER_SYMBOL
-        )
-        /
-        STARTING_CASH_PER_SYMBOL
-    ) * 100
+    total_return_pct = (equity[-1] / STARTING_CASH_PER_SYMBOL - 1.0) * 100.0
 
-    running_max = (
-        np.maximum.accumulate(
-            equity
-        )
-    )
+    running_max = np.maximum.accumulate(equity)
+    drawdowns = ((equity - running_max) / running_max) * 100.0
+    max_drawdown_pct = float(drawdowns.min())
 
-    drawdowns = (
-        (
-            equity -
-            running_max
-        )
-        /
-        running_max
-    ) * 100
+    wins = [t for t in trades if t.get("pnl_pct", 0) > 0]
+    losses = [t for t in trades if t.get("pnl_pct", 0) <= 0]
 
-    max_drawdown_pct = (
-        drawdowns.min()
-    )
+    win_rate = (len(wins) / len(trades) * 100.0) if trades else 0.0
+    avg_win = float(np.mean([t["pnl_pct"] for t in wins])) if wins else 0.0
+    avg_loss = float(np.mean([t["pnl_pct"] for t in losses])) if losses else 0.0
 
-    wins = [
-        t
-        for t in trades
-        if t["pnl_pct"] > 0
-    ]
+    gross_profit = float(sum(max(0.0, t.get("pnl_pct", 0.0)) for t in trades))
+    gross_loss = float(sum(abs(min(0.0, t.get("pnl_pct", 0.0))) for t in trades))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (999.0 if gross_profit > 0 else 0.0)
+    expectancy = float(np.mean([t.get("pnl_pct", 0.0) for t in trades])) if trades else 0.0
 
-    losses = [
-        t
-        for t in trades
-        if t["pnl_pct"] <= 0
-    ]
+    # Approximate annualized Sharpe/Sortino from bar-to-bar equity changes.
+    # The annualization factor adapts to the configured timeframe.
+    rets = np.diff(equity) / equity[:-1] if equity.size > 1 else np.array([])
+    bars_per_day = max(1.0, (390.0 / max(1, _bar_interval_minutes())))
+    annual_factor = np.sqrt(252.0 * bars_per_day)
 
-    win_rate = (
-        len(wins) /
-        len(trades) *
-        100
-        if trades
-        else 0.0
-    )
+    if rets.size > 1 and np.std(rets, ddof=1) > 0:
+        sharpe = float(np.mean(rets) / np.std(rets, ddof=1) * annual_factor)
+    else:
+        sharpe = 0.0
 
-    avg_win = (
-        np.mean(
-            [
-                t["pnl_pct"]
-                for t in wins
-            ]
-        )
-        if wins
-        else 0.0
-    )
+    downside = rets[rets < 0]
+    if downside.size > 1 and np.std(downside, ddof=1) > 0:
+        sortino = float(np.mean(rets) / np.std(downside, ddof=1) * annual_factor)
+    else:
+        sortino = 0.0
 
-    avg_loss = (
-        np.mean(
-            [
-                t["pnl_pct"]
-                for t in losses
-            ]
-        )
-        if losses
-        else 0.0
-    )
+    calmar = float(total_return_pct / abs(max_drawdown_pct)) if max_drawdown_pct < 0 else 0.0
 
     return {
-
-        "total_return_pct":
-            total_return_pct,
-
-        "max_drawdown_pct":
-            max_drawdown_pct,
-
-        "num_trades":
-            len(trades),
-
-        "win_rate":
-            win_rate,
-
-        "avg_win_pct":
-            avg_win,
-
-        "avg_loss_pct":
-            avg_loss,
-
+        "total_return_pct": total_return_pct,
+        "max_drawdown_pct": max_drawdown_pct,
+        "num_trades": len(trades),
+        "win_rate": win_rate,
+        "avg_win_pct": avg_win,
+        "avg_loss_pct": avg_loss,
+        "profit_factor": profit_factor,
+        "expectancy_pct": expectancy,
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "calmar": calmar,
     }
 
 
@@ -2012,6 +2214,11 @@ def aggregate_metrics(
         "max_drawdown_pct",
         "num_trades",
         "win_rate",
+        "profit_factor",
+        "expectancy_pct",
+        "sharpe",
+        "sortino",
+        "calmar",
     ]
 
     agg = {
@@ -2291,6 +2498,7 @@ def build_windows():
     ):
 
         end_offset_days = (
+            BACKTEST_END_OFFSET_DAYS +
             i *
             WINDOW_LENGTH_DAYS
         )
@@ -2990,6 +3198,18 @@ if __name__ == "__main__":
     print(
         f"Iterations per window: "
         f"{ITERATIONS_PER_WINDOW}"
+    )
+
+    print(
+        f"Timeframe: {BAR_TIMEFRAME} | "
+        f"Signal confidence >= {MIN_SIGNAL_CONFIDENCE:.2f} | "
+        f"Meta prob >= {MIN_META_WIN_PROB:.2f}"
+    )
+    print(
+        f"Risk/trade: {RISK_PER_TRADE_PCT:.2%} | "
+        f"Max position: {MAX_POSITION_PCT:.0%} | "
+        f"SL/TP: {STOP_LOSS_PCT:.2f}% / {TAKE_PROFIT_PCT:.2f}% | "
+        f"Trail: {TRAIL_STOP_PCT:.2f}%"
     )
 
     print(

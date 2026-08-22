@@ -101,7 +101,7 @@ class MarketDataLayer:
         self.symbols = symbols
         self.api = api_client
         self.bars = {s: deque(maxlen=self.MAX_BARS_KEPT) for s in symbols}
-        self.current_bar = {s: None for s in symbols}
+        self.current_bar: Dict[str, Optional[dict]] = {s: None for s in symbols}
         self._vader = SentimentIntensityAnalyzer()
         self.news_sentiment = {s: 0.0 for s in symbols}
         self._news_lock = threading.Lock()
@@ -777,7 +777,7 @@ class RiskGate:
             stop_pct = self.entry_stop_pct[symbol]
             target_pct = self.entry_target_pct[symbol]
 
-        if held > 0 and entry and stop_pct is not None:
+        if held > 0 and entry and stop_pct is not None and target_pct is not None:
             change_from_entry = ((current_price - entry) / entry) * 100
             if change_from_entry <= -stop_pct:
                 return self._approve(symbol, "sell", held, now, f"stop-loss hit ({stop_pct:.2f}%)")

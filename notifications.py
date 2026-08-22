@@ -21,6 +21,7 @@ of the dashboard works exactly as before.
 import os
 import logging
 import urllib.request
+from typing import Optional
 
 log = logging.getLogger("trader")
 
@@ -45,7 +46,7 @@ def send_notification(title: str, message: str, priority: str = "default", tags:
         log.error(f"notifications: failed to send ntfy notification: {e}")
 
 
-def notify_run_finished(script_label: str, status: str, duration_seconds: float = None):
+def notify_run_finished(script_label: str, status: str, duration_seconds: Optional[float] = None):
     dur = f" ({int(duration_seconds)}s)" if duration_seconds else ""
     if status == "finished":
         send_notification(f"{script_label} finished", f"Completed successfully{dur}.",

@@ -33,6 +33,7 @@ import signal
 import json
 import threading
 import subprocess
+from typing import Any
 
 from collections import deque
 from datetime import datetime
@@ -56,6 +57,7 @@ from flask import (
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "trade_data")
 from notifications import send_notification, notify_run_finished, notify_new_trade, test_notification
+from credentials_store import load_credentials, save_credentials, status as credentials_status, build_subprocess_env
 os.makedirs(DATA_DIR, exist_ok=True)
 
 PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
@@ -101,6 +103,12 @@ SCRIPTS = {
     "train_meta_model": {
         "file": "train_meta_model.py",
         "label": "Train Meta-Model",
+        "long_running": False,
+    },
+
+    "optimize_strategy": {
+        "file": "strategy_optimizer.py",
+        "label": "Optimize Strategy",
         "long_running": False,
     },
 
@@ -642,6 +650,58 @@ def _reader_thread(run_id, proc):
 
 
 # ============================================================================
+# ALPACA CREDENTIALS
+# ============================================================================
+@app.route("/api/credentials", methods=["GET"])
+def api_credentials():
+    # Never return the raw API secret/key to the browser.
+    return jsonify(credentials_status())
+
+
+@app.route("/api/credentials", methods=["POST"])
+def api_save_credentials():
+    data = request.get_json(silent=True) or {}
+
+    # Only update fields explicitly supplied. This lets the UI preserve a
+    # previously saved secret when the user leaves that field blank.
+    api_key = data.get("alpaca_api_key")
+    secret_key = data.get("alpaca_secret_key")
+    base_url = data.get("alpaca_base_url")
+
+    if api_key is not None and not isinstance(api_key, str):
+        return jsonify({"error": "alpaca_api_key must be a string"}), 400
+    if secret_key is not None and not isinstance(secret_key, str):
+        return jsonify({"error": "alpaca_secret_key must be a string"}), 400
+    if base_url is not None and not isinstance(base_url, str):
+        return jsonify({"error": "alpaca_base_url must be a string"}), 400
+
+    # Prevent accidentally saving a non-Alpaca URL.
+    if base_url is not None:
+        base_url = base_url.strip().rstrip("/")
+        allowed_hosts = (
+            "https://paper-api.alpaca.markets",
+            "https://api.alpaca.markets",
+        )
+        if base_url not in allowed_hosts:
+            return jsonify({
+                "error": "base_url must be an Alpaca paper or live endpoint"
+            }), 400
+
+    try:
+        save_credentials(
+            api_key=api_key,
+            secret_key=secret_key,
+            base_url=base_url,
+        )
+        return jsonify({
+            "saved": True,
+            "credentials": credentials_status(),
+        })
+    except Exception as e:
+        return jsonify({"error": f"could not save credentials: {e}"}), 500
+
+
+# ============================================================================
 # SCRIPT API
 # ============================================================================
 @app.route("/api/notifications/test", methods=["POST"])
@@ -740,7 +800,7 @@ def api_run(script_key):
             f"{int(time.time() * 1000)}"
         )
 
-        kwargs = dict(
+        kwargs: dict[str, Any] = dict(
             cwd=BASE_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -753,6 +813,11 @@ def api_run(script_key):
             kwargs["creationflags"] = (
                 subprocess.CREATE_NEW_PROCESS_GROUP
             )
+
+        # Read credentials from credentials.json immediately before launch.
+        # This means newly saved keys are used on the very next run without
+        # restarting the dashboard or changing terminal environment variables.
+        kwargs["env"] = build_subprocess_env()
 
         proc = subprocess.Popen(
             [sys.executable, file_path],
@@ -2784,6 +2849,80 @@ tr:last-child td {
 
 
 <!-- =====================================================================
+     SETTINGS
+     ===================================================================== -->
+
+<div
+    class="tab-page"
+    id="page-settings"
+>
+    <div class="section-title">
+        <h2>Settings</h2>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Alpaca API</span>
+            <span id="credentials-status" class="badge">Loading</span>
+        </div>
+
+        <div class="muted" style="margin-top:6px;line-height:1.5;">
+            Keys are saved by the dashboard to
+            <code>trade_data/credentials.json</code>.
+            The raw keys are never sent back to the browser.
+        </div>
+
+        <div style="margin-top:14px;">
+            <label style="display:block;color:var(--faint);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">
+                Alpaca API Key
+            </label>
+            <input
+                id="alpaca-api-key"
+                type="text"
+                autocomplete="off"
+                placeholder="Leave blank to keep saved key"
+                style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:11px;font-size:13px;outline:none;"
+            >
+        </div>
+
+        <div style="margin-top:12px;">
+            <label style="display:block;color:var(--faint);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">
+                Alpaca Secret Key
+            </label>
+            <input
+                id="alpaca-secret-key"
+                type="password"
+                autocomplete="new-password"
+                placeholder="Leave blank to keep saved secret"
+                style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:11px;font-size:13px;outline:none;"
+            >
+        </div>
+
+        <div style="margin-top:12px;">
+            <label style="display:block;color:var(--faint);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">
+                Trading Endpoint
+            </label>
+            <select
+                id="alpaca-base-url"
+                style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:11px;font-size:13px;outline:none;"
+            >
+                <option value="https://paper-api.alpaca.markets">Paper Trading</option>
+                <option value="https://api.alpaca.markets">Live Trading</option>
+            </select>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn primary" onclick="saveAlpacaCredentials()">
+                Save API Keys
+            </button>
+        </div>
+
+        <div id="credentials-message" class="muted" style="margin-top:10px;"></div>
+    </div>
+</div>
+
+
+<!-- =====================================================================
      HYPOTHESIS
      ===================================================================== -->
 
@@ -2879,6 +3018,22 @@ tr:last-child td {
 
 </button>
 
+
+<button
+    class="tab-button"
+    data-tab="settings"
+>
+    <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+    >
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.7 1.7 0 000-6l-1.5-.5a6.7 6.7 0 00-.8-1.4l.7-1.4a1.7 1.7 0 00-2.4-2.4l-1.4.7a6.7 6.7 0 00-1.4-.8L12 1.7a1.7 1.7 0 00-6 0L5.5 3a6.7 6.7 0 00-1.4.8l-1.4-.7a1.7 1.7 0 00-2.4 2.4l.7 1.4a6.7 6.7 0 00-.8 1.4L.1 9a1.7 1.7 0 000 6l1.5.5a6.7 6.7 0 00.8 1.4l-.7 1.4a1.7 1.7 0 002.4 2.4l1.4-.7a6.7 6.7 0 001.4.8l.5 1.5a1.7 1.7 0 006 0l.5-1.5a6.7 6.7 0 001.4-.8l1.4.7a1.7 1.7 0 002.4-2.4l-.7-1.4a6.7 6.7 0 00.8-1.4z"/>
+    </svg>
+    Settings
+</button>
 
 <button
     class="tab-button"
@@ -3148,6 +3303,10 @@ document
                 {
                     loadHypothesis();
 
+                } else if (
+                tab === "settings"
+                ) {
+                    loadAlpacaCredentials();
                 }
 
         }
@@ -5355,6 +5514,92 @@ async function loadHypothesis() {
         console.error(
             error
         );
+    }
+}
+
+
+/* ========================================================================
+   ALPACA CREDENTIALS
+   ======================================================================== */
+
+async function loadAlpacaCredentials() {
+    try {
+        const response = await apiFetch("/api/credentials");
+        const data = await response.json();
+
+        const status = document.getElementById("credentials-status");
+        const message = document.getElementById("credentials-message");
+        const baseUrl = document.getElementById("alpaca-base-url");
+
+        if (data.api_key_set && data.secret_key_set) {
+            status.textContent = data.is_paper ? "Paper configured" : "Live configured";
+            status.className = "badge running";
+        } else {
+            status.textContent = "Not configured";
+            status.className = "badge";
+        }
+
+        if (baseUrl && data.base_url) {
+            baseUrl.value = data.base_url;
+        }
+
+        if (message) {
+            if (data.api_key_set || data.secret_key_set) {
+                message.textContent =
+                    "Saved: " +
+                    (data.api_key_masked || "no API key") +
+                    " / " +
+                    (data.secret_key_masked || "no secret key");
+            } else {
+                message.textContent = "No Alpaca credentials saved yet.";
+            }
+        }
+    } catch (error) {
+        console.error("Failed to load Alpaca credentials", error);
+    }
+}
+
+
+async function saveAlpacaCredentials() {
+    const apiKey = document.getElementById("alpaca-api-key").value.trim();
+    const secretKey = document.getElementById("alpaca-secret-key").value.trim();
+    const baseUrl = document.getElementById("alpaca-base-url").value;
+
+    const message = document.getElementById("credentials-message");
+
+    try {
+        message.textContent = "Saving…";
+
+        const response = await apiFetch(
+            "/api/credentials",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    alpaca_api_key: apiKey || undefined,
+                    alpaca_secret_key: secretKey || undefined,
+                    alpaca_base_url: baseUrl
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Could not save credentials");
+        }
+
+        // Clear secret fields after saving so they don't remain in the page.
+        document.getElementById("alpaca-api-key").value = "";
+        document.getElementById("alpaca-secret-key").value = "";
+
+        message.textContent = "Saved. New keys will be used on the next script run.";
+        await loadAlpacaCredentials();
+    } catch (error) {
+        console.error(error);
+        message.textContent = "Save failed: " + error.message;
     }
 }
 

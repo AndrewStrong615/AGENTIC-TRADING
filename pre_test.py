@@ -35,7 +35,7 @@ print("Running preflight checks...\n")
 # --- 1. Environment variables ---
 api_key = os.environ.get("ALPACA_API_KEY")
 secret_key = os.environ.get("ALPACA_SECRET_KEY")
-base_url = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+base_url = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
 
 check("ALPACA_API_KEY is set", bool(api_key))
 check("ALPACA_SECRET_KEY is set", bool(secret_key))

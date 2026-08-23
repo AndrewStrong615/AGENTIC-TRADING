@@ -42,7 +42,33 @@ except Exception as e:
     api = None
     stream = None
 
-SYMBOLS = ["AAPL", "TSLA", "MSFT", "NVDA", "JPM", "XOM", "JNJ", "SPY"]
+SYMBOLS = [
+    "AAPL",   # Apple
+    "MSFT",   # Microsoft
+    "NVDA",   # NVIDIA
+    "AMZN",   # Amazon
+    "GOOGL",  # Alphabet Class A
+    "META",   # Meta Platforms
+    "AVGO",   # Broadcom
+    "TSLA",   # Tesla
+    "AMD",    # Advanced Micro Devices
+    "MU",     # Micron Technology
+    "JPM",    # JPMorgan Chase
+    "V",      # Visa
+    "MA",     # Mastercard
+    "BAC",    # Bank of America
+    "WMT",    # Walmart
+    "COST",   # Costco
+    "XOM",    # Exxon Mobil
+    "JNJ",    # Johnson & Johnson
+    "LLY",    # Eli Lilly
+    "ABBV",   # AbbVie
+    "HD",     # Home Depot
+    "CAT",    # Caterpillar
+    "CSCO",   # Cisco
+    "ORCL",   # Oracle
+    "NFLX",   # Netflix
+]
 
 data_layer = MarketDataLayer(SYMBOLS, api_client=api)
 meta_filter = MetaModelFilter(os.path.join(DATA_DIR, "meta_model.joblib"))

@@ -4,8 +4,6 @@ morning you're actually trading. Read-only: never places an order, never
 modifies anything except to confirm trade_data/ exists. Just tells you
 plainly whether you're actually ready to go.
 
-Usage:
-    python preflight_check.py
 """
 
 import os

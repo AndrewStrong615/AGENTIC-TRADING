@@ -1,6 +1,6 @@
 {
   "AAPL": {
-    "batch": 2e-323,
+    "batch": 1.5e-323,
     "online": 1.5e-323,
     "markov": 1.0,
     "meanrev": 1.5e-323
@@ -12,7 +12,7 @@
     "meanrev": 1.5e-323
   },
   "MSFT": {
-    "batch": 1.3863144806608034e-253,
+    "batch": 9.431416747251943e-255,
     "online": 1.5e-323,
     "markov": 1.0,
     "meanrev": 1.5e-323

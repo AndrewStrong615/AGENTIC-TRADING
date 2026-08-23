@@ -1,0 +1,30 @@
+{
+  "selected_on": "validation_score",
+  "config": {
+    "BAR_TIMEFRAME": "15m",
+    "MIN_SIGNAL_CONFIDENCE": 0.35,
+    "MIN_META_WIN_PROB": 0.55,
+    "RISK_PER_TRADE_PCT": 0.005,
+    "MAX_POSITION_PCT": 0.15,
+    "STOP_LOSS_PCT": 0.6,
+    "TAKE_PROFIT_PCT": 0.9,
+    "TRAIL_STOP_PCT": 0.8,
+    "ATR_STOP_MULTIPLIER": 0.0,
+    "MIN_ATR_PCT": 0.1,
+    "MAX_ATR_PCT": 2.5
+  },
+  "training_score": 21.14257340845202,
+  "validation_score": 8.395518957867722,
+  "validation_metrics": {
+    "total_return_pct_mean": -0.00606669750000885,
+    "max_drawdown_pct_mean": -0.2600469418503988,
+    "win_rate_mean": 29.19642857142857,
+    "num_trades_mean": 3.625,
+    "profit_factor_mean": 63.12135110843804,
+    "expectancy_pct_mean": -0.26569926096112156,
+    "sharpe_mean": -0.9324188963464032,
+    "sortino_mean": 0.1721520396514732,
+    "calmar_mean": 0.2687383131413056
+  },
+  "generated_at": "2026-08-22T07:35:51Z"
+}

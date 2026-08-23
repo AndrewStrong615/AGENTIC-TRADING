@@ -10,8 +10,7 @@ LAYER 3 — RiskGate (deterministic, unbypassable, Kelly + vol-targeted sizing)
 All trade-log output automatically lands in a `trade_data/` folder next to
 this file — RiskGate creates that folder itself the first time it needs it,
 so no manual file-moving is required, regardless of what path a caller
-passes in (as long as it's under trade_data/, which backtest.py and
-trader_v3.py both do by default now).
+passes in (as long as it's under trade_data/.
 """
 
 import time
@@ -26,6 +25,29 @@ from collections import deque
 from datetime import datetime, timezone, timedelta
 from notifications import notify_order_placed
 from typing import Optional, Dict
+
+# Conservative shared strategy configuration. Explicit environment variables
+# (including optimizer trials) take precedence over the saved config.
+try:
+    from strategy_config import load_best_config
+    _BEST_CONFIG = load_best_config()
+except Exception:
+    _BEST_CONFIG = {}
+
+
+def _cfg_float(name, default):
+    try:
+        return float(os.environ.get(name, _BEST_CONFIG.get(name, default)))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _cfg_int(name, default):
+    try:
+        return int(float(os.environ.get(name, _BEST_CONFIG.get(name, default))))
+    except (TypeError, ValueError):
+        return int(default)
+
 
 import numpy as np
 from sklearn.linear_model import LinearRegression, SGDClassifier
@@ -322,8 +344,8 @@ class MarketDataLayer:
 # =============================================================================
 class SignalLayer:
     MIN_BARS_FOR_MODEL = 40
-    RETRAIN_EVERY_N_BARS = 5
-    WEIGHT_LEARNING_RATE = 0.15
+    RETRAIN_EVERY_N_BARS = _cfg_int("RETRAIN_EVERY_N_BARS", 5)
+    WEIGHT_LEARNING_RATE = _cfg_float("WEIGHT_LEARNING_RATE", 0.15)
 
     MARKOV_STATE_WINDOW = 100
     MARKOV_FLAT_THRESHOLD = 0.0005
@@ -611,12 +633,12 @@ class SignalLayer:
 # LAYER 3 — RiskGate
 # =============================================================================
 class RiskGate:
-    CONFIDENCE_THRESHOLD = 0.62
+    CONFIDENCE_THRESHOLD = _cfg_float("MIN_SIGNAL_CONFIDENCE", 0.62)
     TREND_AGREEMENT_REQUIRED = True
     NEWS_VETO_THRESHOLD = -0.35
     MAX_POSITION_PER_SYMBOL = 8
     MIN_SECONDS_BETWEEN_ORDERS = 30
-    ATR_STOP_MULTIPLIER = 1.5
+    ATR_STOP_MULTIPLIER = _cfg_float("ATR_STOP_MULTIPLIER", 1.5)
     ATR_TARGET_MULTIPLIER = 2.5
     MIN_STOP_PCT = 0.15
     MAX_STOP_PCT = 1.5
@@ -625,6 +647,10 @@ class RiskGate:
 
     KELLY_FRACTION_MULTIPLIER = 0.5
     MAX_KELLY_FRACTION = 0.05
+    MAX_POSITION_PCT = _cfg_float("MAX_POSITION_PCT", 0.20)
+    RISK_PER_TRADE_PCT = _cfg_float("RISK_PER_TRADE_PCT", 0.005)
+    FIXED_STOP_PCT = _cfg_float("STOP_LOSS_PCT", 1.0)
+    FIXED_TARGET_PCT = _cfg_float("TAKE_PROFIT_PCT", 2.0)
     DEFAULT_EQUITY_ESTIMATE = 10_000.0
 
     def __init__(self, symbols, api_client=None, trade_log_path="trade_data/trade_log.csv"):
@@ -763,7 +789,13 @@ class RiskGate:
         if stop_distance <= 0:
             return 0
 
-        qty = int(dollar_risk / stop_distance)
+        # Conservative hard risk budget from shared strategy config.
+        configured_risk = max(0.0, min(self.RISK_PER_TRADE_PCT, 0.02))
+        dollar_risk = min(dollar_risk, equity_estimate * configured_risk)
+
+        qty_by_risk = int(dollar_risk / stop_distance)
+        qty_by_position = int((equity_estimate * self.MAX_POSITION_PCT) / price) if price > 0 else 0
+        qty = min(qty_by_risk, qty_by_position)
         return max(0, min(qty, self.MAX_QTY_PER_ORDER))
 
     def evaluate(self, signal: TradeSignal, current_price: float, now: Optional[float] = None) -> GateDecision:
@@ -808,8 +840,12 @@ class RiskGate:
             if held >= self.MAX_POSITION_PER_SYMBOL:
                 return GateDecision(False, None, None, "at max position size")
 
-            stop_pct = float(np.clip(signal.atr_pct * self.ATR_STOP_MULTIPLIER, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
-            target_pct = float(np.clip(signal.atr_pct * self.ATR_TARGET_MULTIPLIER, self.MIN_STOP_PCT, self.MAX_STOP_PCT * 2))
+            if self.ATR_STOP_MULTIPLIER > 0:
+                stop_pct = float(np.clip(signal.atr_pct * self.ATR_STOP_MULTIPLIER, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
+                target_pct = float(np.clip(signal.atr_pct * self.ATR_TARGET_MULTIPLIER, self.MIN_STOP_PCT, self.MAX_STOP_PCT * 2))
+            else:
+                stop_pct = float(np.clip(self.FIXED_STOP_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
+                target_pct = float(np.clip(self.FIXED_TARGET_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT * 2))
             qty = self._size_position(signal.confidence, stop_pct, target_pct, current_price)
             if qty <= 0:
                 return GateDecision(False, None, None, "Kelly-sized position rounded to zero shares — edge too small")

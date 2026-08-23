@@ -3,8 +3,6 @@ analyze_trade_log.py — Reads a trade log CSV and reports how the Layer 2
 ensemble's blend weights evolved, and which sub-model tended to be right
 when it carried more of the weight.
 
-Usage:
-    python analyze_trade_log.py [path_to_trade_log.csv]
 
 Defaults to trade_data/trade_log.csv if no path is given.
 """

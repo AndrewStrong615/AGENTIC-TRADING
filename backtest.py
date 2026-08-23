@@ -22,6 +22,8 @@ reads its state, so navigating away from the dashboard does NOT stop it.
 """
 
 import os
+# Load the latest validated optimizer configuration before Tradingcore imports.
+import strategy_config  # noqa: F401
 import json
 import socket
 import time
@@ -41,6 +43,14 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# Load the most recently promoted conservative strategy config before any
+# strategy constants are read. Explicit environment variables still win.
+try:
+    from strategy_config import apply_best_config_to_env
+    apply_best_config_to_env()
+except Exception:
+    pass
 
 from typing import Any, TYPE_CHECKING, cast
 
@@ -292,6 +302,20 @@ if RISK_PER_TRADE_PCT < 0:
     RISK_PER_TRADE_PCT = 0.0
 MAX_POSITION_PCT = max(0.01, min(MAX_POSITION_PCT, 1.0))
 
+
+# The optimizer writes the latest validated settings to
+# trade_data/best_strategy_config.json. strategy_config loads them above;
+# explicit environment variables remain higher priority for optimizer trials.
+print(
+    "[strategy] "
+    f"timeframe={BAR_TIMEFRAME} | "
+    f"confidence>={MIN_SIGNAL_CONFIDENCE:.2f} | "
+    f"meta>={MIN_META_WIN_PROB:.2f} | "
+    f"risk={RISK_PER_TRADE_PCT:.2%} | "
+    f"max_position={MAX_POSITION_PCT:.2%} | "
+    f"SL={STOP_LOSS_PCT:.3g}% | TP={TAKE_PROFIT_PCT:.3g}% | "
+    f"trail={TRAIL_STOP_PCT:.3g}%"
+)
 
 # ============================================================================
 # FAST MODE

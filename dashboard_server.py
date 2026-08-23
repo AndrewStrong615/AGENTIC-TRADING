@@ -27,6 +27,7 @@ The server listens on:
 """
 
 import os
+import strategy_config  # load latest validated strategy settings
 import sys
 import time
 import signal

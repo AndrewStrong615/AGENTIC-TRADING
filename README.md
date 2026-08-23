@@ -310,9 +310,6 @@ The project intentionally separates:
 
 This makes it easier to test each component independently and prevents a single backtest from automatically changing live behavior without passing the conservative validation gates.
 
-## License
-
-Add your project's license here before publishing the repository.
 
 ## Disclaimer
 

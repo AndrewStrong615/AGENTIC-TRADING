@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T17:54:16.593677+00:00", "symbol": "LLY", "action": "buy", "qty": 3, "price": 1246.04, "reason": "signal conf=0.61 qty=3 (Kelly-sized) experts=batch:0.39/online:0.00/markov:0.61/meanrev:0.00 regime=choppy/low/hmm:bull stop=0.60% target=0.90%"}

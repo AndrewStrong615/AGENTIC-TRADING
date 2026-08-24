@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T19:35:30.701509+00:00", "symbol": "NVDA", "action": "buy", "qty": 3, "price": 208.73, "reason": "signal conf=0.50 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_down/normal/hmm:bull stop=0.60% target=0.90%"}

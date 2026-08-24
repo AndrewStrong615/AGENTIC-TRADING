@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T18:22:11.412029+00:00", "symbol": "MA", "action": "buy", "qty": 3, "price": 596.19, "reason": "signal conf=0.52 qty=3 (Kelly-sized) experts=batch:0.24/online:0.00/markov:0.76/meanrev:0.00 regime=trending_up/normal/hmm:bear stop=0.60% target=0.90%"}

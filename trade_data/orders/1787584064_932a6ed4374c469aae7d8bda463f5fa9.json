@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T15:07:44.499896+00:00", "symbol": "COST", "action": "buy", "qty": 3, "price": 963.74, "reason": "signal conf=0.52 qty=3 (Kelly-sized) experts=batch:0.52/online:0.02/markov:0.36/meanrev:0.10 regime=choppy/low/hmm:neutral stop=0.60% target=0.90%"}

@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T14:15:43.774935+00:00", "symbol": "AVGO", "action": "buy", "qty": 3, "price": 362.52, "reason": "signal conf=0.52 qty=3 (Kelly-sized) experts=batch:0.31/online:0.05/markov:0.48/meanrev:0.16 regime=trending_down/normal/hmm:neutral stop=0.60% target=0.90%"}

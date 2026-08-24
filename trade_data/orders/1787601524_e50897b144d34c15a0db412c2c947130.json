@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T19:58:44.367787+00:00", "symbol": "AMZN", "action": "buy", "qty": 3, "price": 262.36, "reason": "signal conf=0.50 qty=3 (Kelly-sized) experts=batch:0.05/online:0.00/markov:0.95/meanrev:0.00 regime=choppy/high/hmm:bull stop=0.60% target=0.90%"}

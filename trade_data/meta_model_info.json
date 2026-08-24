@@ -1,0 +1,46 @@
+{
+  "trained_at": "2026-08-24T22:18:20.519296+00:00",
+  "training_rows": 84412,
+  "validation_rows": 28137,
+  "total_completed_trades": 112549,
+  "data_sources": {
+    "backtest_archive": 91882,
+    "backtest_legacy": 20667
+  },
+  "feature_cols": [
+    "entry_confidence",
+    "entry_trend_change_pct",
+    "entry_atr_pct",
+    "entry_news_sentiment",
+    "entry_batch_weight",
+    "entry_online_weight",
+    "entry_markov_weight",
+    "entry_meanrev_weight",
+    "entry_hmm_regime_prob",
+    "vol_high",
+    "vol_low",
+    "vol_normal",
+    "trend_choppy",
+    "trend_trending_down",
+    "trend_trending_up",
+    "hmm_bear",
+    "hmm_bull",
+    "hmm_neutral",
+    "hmm_unavailable"
+  ],
+  "validation_metrics": {
+    "accuracy": 0.5942353484735402,
+    "balanced_accuracy": 0.5969282424221967,
+    "auc": 0.6375922062505678,
+    "brier": 0.23698975459328508,
+    "baseline_accuracy": 0.5694636954899244
+  },
+  "previous_validation_metrics": null,
+  "promotion": {
+    "promoted": true,
+    "minimum_trades": 200,
+    "min_auc": 0.55,
+    "min_auc_improvement": 0.02,
+    "max_brier_degradation": 0.015
+  }
+}

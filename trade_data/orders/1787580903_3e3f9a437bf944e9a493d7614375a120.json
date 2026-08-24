@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T14:15:03.107293+00:00", "symbol": "BAC", "action": "buy", "qty": 3, "price": 62.57, "reason": "signal conf=0.51 qty=3 (Kelly-sized) experts=batch:0.28/online:0.12/markov:0.45/meanrev:0.14 regime=trending_up/normal/hmm:neutral stop=0.60% target=0.90%"}

@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T14:11:44.628022+00:00", "symbol": "JPM", "action": "buy", "qty": 3, "price": 357.515, "reason": "signal conf=0.51 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_up/normal/hmm:bear stop=0.60% target=0.90%"}

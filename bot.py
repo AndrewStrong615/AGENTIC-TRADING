@@ -1,8 +1,9 @@
 """
 trader_v3.py — Live trading entry point.
 
-All trade logs and the meta-model file automatically land in trade_data/,
-same as backtest.py — that folder is created on first run if needed.
+Uses credentials_store.py so direct launches and dashboard launches use the
+same persisted Alpaca credentials. Uses an Alpaca base URL without /v2;
+tradeapi.REST adds its API version path itself.
 """
 
 import os
@@ -12,71 +13,116 @@ import logging
 
 import alpaca_trade_api as tradeapi
 
+from credentials_store import load_credentials
 from Tradingcore import MarketDataLayer, SignalLayer, RiskGate
 from meta_filter import MetaModelFilter
 
-DATA_DIR = "trade_data"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "trade_data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(os.path.join(DATA_DIR, "trader.log")), logging.StreamHandler()],
+    handlers=[
+        logging.FileHandler(os.path.join(DATA_DIR, "trader.log")),
+        logging.StreamHandler(),
+    ],
 )
 log = logging.getLogger("trader")
 
-API_KEY = os.environ.get("ALPACA_API_KEY")
-SECRET_KEY = os.environ.get("ALPACA_SECRET_KEY")
-BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
+# -----------------------------------------------------------------------------
+# Alpaca credentials
+# -----------------------------------------------------------------------------
+# credentials_store.py is the primary source. Environment variables remain a
+# fallback for compatibility with older setups.
+try:
+    creds = load_credentials()
+except Exception as e:
+    log.error(f"Failed to load credentials_store.py: {e}")
+    creds = {}
+
+API_KEY = creds.get("alpaca_api_key") or os.environ.get("ALPACA_API_KEY", "")
+SECRET_KEY = creds.get("alpaca_secret_key") or os.environ.get("ALPACA_SECRET_KEY", "")
+BASE_URL = (
+    creds.get("alpaca_base_url")
+    or os.environ.get("ALPACA_BASE_URL")
+    or "https://paper-api.alpaca.markets"
+).rstrip("/")
+
+# Never print the actual credentials.
+log.info(
+    "Alpaca credentials loaded: api_key=%s secret_key=%s base_url=%s",
+    "yes" if API_KEY else "NO",
+    "yes" if SECRET_KEY else "NO",
+    BASE_URL,
+)
 
 api = None
 stream = None
 try:
     if API_KEY and SECRET_KEY:
-        api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL, api_version="v2")
-        stream = tradeapi.Stream(API_KEY, SECRET_KEY, BASE_URL, data_feed="iex")
+        api = tradeapi.REST(
+            API_KEY,
+            SECRET_KEY,
+            BASE_URL,
+            api_version="v2",
+        )
+        stream = tradeapi.Stream(
+            API_KEY,
+            SECRET_KEY,
+            BASE_URL,
+            data_feed="iex",
+        )
     else:
-        log.info("ALPACA credentials not found; running in offline/fallback mode (no live stream).")
+        log.error("Alpaca credentials not found; live trading stream disabled.")
 except Exception as e:
     log.error(f"Failed to initialize Alpaca API/stream: {e}")
     api = None
     stream = None
 
 SYMBOLS = [
-    "AAPL",   # Apple
-    "MSFT",   # Microsoft
-    "NVDA",   # NVIDIA
-    "AMZN",   # Amazon
-    "GOOGL",  # Alphabet Class A
-    "META",   # Meta Platforms
-    "AVGO",   # Broadcom
-    "TSLA",   # Tesla
-    "AMD",    # Advanced Micro Devices
-    "MU",     # Micron Technology
-    "JPM",    # JPMorgan Chase
-    "V",      # Visa
-    "MA",     # Mastercard
-    "BAC",    # Bank of America
-    "WMT",    # Walmart
-    "COST",   # Costco
-    "XOM",    # Exxon Mobil
-    "JNJ",    # Johnson & Johnson
-    "LLY",    # Eli Lilly
-    "ABBV",   # AbbVie
-    "HD",     # Home Depot
-    "CAT",    # Caterpillar
-    "CSCO",   # Cisco
-    "ORCL",   # Oracle
-    "NFLX",   # Netflix
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "AVGO",
+    "TSLA",
+    "AMD",
+    "MU",
+    "JPM",
+    "V",
+    "MA",
+    "BAC",
+    "WMT",
+    "COST",
+    "XOM",
+    "JNJ",
+    "LLY",
+    "ABBV",
+    "HD",
+    "CAT",
+    "CSCO",
+    "ORCL",
+    "NFLX",
 ]
 
 data_layer = MarketDataLayer(SYMBOLS, api_client=api)
 meta_filter = MetaModelFilter(os.path.join(DATA_DIR, "meta_model.joblib"))
-signal_layer = SignalLayer(data_layer, meta_filter=meta_filter,
-                            weights_path=os.path.join(DATA_DIR, "expert_weights.json"))
-risk_gate = RiskGate(SYMBOLS, api_client=api, trade_log_path=os.path.join(DATA_DIR, "trade_log.csv"))
+signal_layer = SignalLayer(
+    data_layer,
+    meta_filter=meta_filter,
+    weights_path=os.path.join(DATA_DIR, "expert_weights.json"),
+)
+risk_gate = RiskGate(
+    SYMBOLS,
+    api_client=api,
+    trade_log_path=os.path.join(DATA_DIR, "trade_log.csv"),
+)
 
-WEIGHTS_AUTOSAVE_INTERVAL_SECONDS = 300  # persist learned expert-trust every 5 minutes, not just on shutdown
+WEIGHTS_AUTOSAVE_INTERVAL_SECONDS = 300
 
 
 def weights_autosave_loop():
@@ -100,6 +146,12 @@ async def on_trade(trade):
 
 
 def main():
+    if api is None or stream is None:
+        raise RuntimeError(
+            "Alpaca API/stream is not initialized. Check trade_data/credentials.json "
+            "and make sure the credentials belong to the selected Alpaca endpoint."
+        )
+
     log.info("Bootstrapping historical bars...")
     data_layer.bootstrap_history()
 
@@ -115,7 +167,10 @@ def main():
     threading.Thread(target=weights_autosave_loop, daemon=True).start()
     threading.Thread(target=stream.run, daemon=True).start()
 
-    log.info("Three-layer trading system online: MarketDataLayer -> SignalLayer (adaptive) -> RiskGate (fixed).")
+    log.info(
+        "Three-layer trading system online: "
+        "MarketDataLayer -> SignalLayer (adaptive) -> RiskGate (fixed)."
+    )
     try:
         while True:
             time.sleep(1)

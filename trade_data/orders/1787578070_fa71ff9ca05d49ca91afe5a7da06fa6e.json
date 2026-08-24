@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T13:27:50.296881+00:00", "symbol": "AMD", "action": "buy", "qty": 3, "price": 465.99, "reason": "signal conf=0.69 qty=3 (Kelly-sized) experts=batch:0.27/online:0.22/markov:0.28/meanrev:0.23 regime=trending_down/high/hmm:neutral stop=0.60% target=0.90%"}

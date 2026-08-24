@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T13:30:49.232837+00:00", "symbol": "ABBV", "action": "buy", "qty": 3, "price": 263.65, "reason": "signal conf=0.61 qty=3 (Kelly-sized) experts=batch:0.25/online:0.25/markov:0.25/meanrev:0.25 regime=trending_down/high/hmm:neutral stop=0.60% target=0.90%"}

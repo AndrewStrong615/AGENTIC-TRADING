@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-24T14:11:34.258289+00:00", "symbol": "NFLX", "action": "buy", "qty": 3, "price": 80.14, "reason": "signal conf=0.54 qty=3 (Kelly-sized) experts=batch:0.34/online:0.12/markov:0.39/meanrev:0.15 regime=choppy/normal/hmm:bull stop=0.60% target=0.90%"}

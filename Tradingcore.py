@@ -662,7 +662,9 @@ class RiskGate:
         self.entry_stop_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
         self.entry_target_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
         self.entry_signal_context: Dict[str, Optional[TradeSignal]] = {s: None for s in symbols}
+        self.entry_qty: Dict[str, int] = {s: 0 for s in symbols}
         self.last_order_time: Dict[str, float] = {s: 0.0 for s in symbols}
+        self._last_known_qty: Dict[str, int] = {s: 0 for s in symbols}
         self.trading_halted = False
         self.starting_equity = None
         self.state_lock = threading.Lock()
@@ -736,22 +738,106 @@ class RiskGate:
                 csv.writer(f).writerow(row)
 
     def refresh_positions(self):
+        """Synchronize local state with Alpaca and record externally closed positions.
+
+        The old implementation silently cleared local entry state whenever
+        Alpaca reported qty=0. That meant a trade closed by Alpaca, a manual
+        close, or another process never produced a completed row in
+        trade_log.csv. This reconciliation records that close before clearing
+        the entry context.
+        """
         if self.api is None:
             return
         try:
-            held = {p.symbol: (int(float(p.qty)), float(p.avg_entry_price)) for p in self.api.list_positions()}
+            held = {
+                p.symbol: (int(float(p.qty)), float(p.avg_entry_price))
+                for p in self.api.list_positions()
+            }
         except Exception as e:
             log.error(f"RiskGate: failed to refresh positions: {e}")
             return
-        with self.positions_lock:
-            for s in self.symbols:
-                qty, avg_price = held.get(s, (0, None))
-                self.current_positions[s] = qty
-                self.entry_prices[s] = avg_price if qty > 0 else None
-                if qty == 0:
+
+        for s in self.symbols:
+            current_qty, current_avg = held.get(s, (0, None))
+
+            with self.positions_lock:
+                previous_qty = self._last_known_qty.get(s, self.current_positions.get(s, 0))
+                previous_entry = self.entry_prices.get(s)
+                previous_signal = self.entry_signal_context.get(s)
+                previous_stop = self.entry_stop_pct.get(s)
+                previous_target = self.entry_target_pct.get(s)
+
+            # If a previously-held long position is now flat, Alpaca (or an
+            # external/manual action) closed it. Log the completed outcome using
+            # the actual Alpaca average entry price and the current market/exit
+            # price when available.
+            if previous_qty > 0 and current_qty == 0 and previous_entry:
+                try:
+                    exit_price = previous_entry
+
+                    # Prefer the latest quote when available. Fall back to the
+                    # stored entry price if quote retrieval fails.
+                    try:
+                        quote = self.api.get_latest_trade(s)
+                        quote_price = getattr(quote, "price", None)
+                        if quote_price is not None:
+                            exit_price = float(quote_price)
+                    except Exception:
+                        pass
+
+                    pnl_pct = ((exit_price - float(previous_entry)) / float(previous_entry)) * 100.0
+                    row = [
+                        datetime.now(timezone.utc).isoformat(),
+                        s,
+                        float(previous_entry),
+                        float(exit_price),
+                        round(pnl_pct, 4),
+                        "position_closed_detected_by_sync",
+                    ]
+
+                    if previous_signal is not None:
+                        row += [
+                            round(previous_signal.confidence, 4),
+                            previous_signal.direction,
+                            round(previous_signal.trend_change_pct, 4),
+                            previous_signal.volatility_regime,
+                            previous_signal.trend_regime,
+                            previous_signal.hmm_regime,
+                            round(previous_signal.hmm_regime_prob, 4),
+                            round(previous_signal.atr_pct, 4),
+                            round(previous_signal.news_sentiment, 4),
+                            round(previous_signal.batch_weight, 4),
+                            round(previous_signal.online_weight, 4),
+                            round(previous_signal.markov_weight, 4),
+                            round(previous_signal.meanrev_weight, 4),
+                            round(previous_signal.meta_win_prob, 4),
+                        ]
+                    else:
+                        row += [None] * 14
+
+                    with self._log_lock:
+                        with open(self.trade_log_path, "a", newline="", encoding="utf-8") as f:
+                            csv.writer(f).writerow(row)
+
+                    log.info(
+                        f"[{s}] Recorded externally detected closed trade: "
+                        f"entry=${float(previous_entry):.2f} exit=${float(exit_price):.2f} "
+                        f"PnL={pnl_pct:+.4f}%"
+                    )
+                except Exception as e:
+                    log.error(f"[{s}] Failed to record externally detected close: {e}")
+
+            with self.positions_lock:
+                self.current_positions[s] = current_qty
+                self.entry_prices[s] = current_avg if current_qty > 0 else None
+
+                if current_qty == 0:
                     self.entry_stop_pct[s] = None
                     self.entry_target_pct[s] = None
                     self.entry_signal_context[s] = None
+                    self.entry_qty[s] = 0
+
+                self._last_known_qty[s] = current_qty
 
     def check_daily_loss_limit(self):
         if self.api is None:
@@ -854,6 +940,7 @@ class RiskGate:
                 self.entry_stop_pct[symbol] = stop_pct
                 self.entry_target_pct[symbol] = target_pct
                 self.entry_signal_context[symbol] = signal
+                self.entry_qty[symbol] = qty
             return self._approve(symbol, "buy", qty, now,
                                   f"signal conf={signal.confidence:.2f} qty={qty} (Kelly-sized) "
                                   f"experts=batch:{signal.batch_weight:.2f}/online:{signal.online_weight:.2f}/"
@@ -922,5 +1009,12 @@ class RiskGate:
             with self.positions_lock:
                 delta = decision.qty if decision.action == "buy" else -decision.qty
                 self.current_positions[symbol] += delta
+                if decision.action == "buy":
+                    self._last_known_qty[symbol] = self.current_positions[symbol]
+                    self.entry_qty[symbol] = self.current_positions[symbol]
+                else:
+                    self._last_known_qty[symbol] = self.current_positions[symbol]
+                    if self.current_positions[symbol] <= 0:
+                        self.entry_qty[symbol] = 0
         except Exception as e:
             log.error(f"[{symbol}] Order failed: {e}")

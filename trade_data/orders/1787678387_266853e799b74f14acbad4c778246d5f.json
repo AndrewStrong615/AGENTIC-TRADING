@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-25T17:19:47.903130+00:00", "symbol": "CSCO", "action": "buy", "qty": 3, "price": 111.03, "reason": "signal conf=0.50 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=choppy/low/hmm:neutral stop=0.60% target=0.90%"}

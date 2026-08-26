@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-25T15:13:19.101175+00:00", "symbol": "V", "action": "buy", "qty": 3, "price": 382.625, "reason": "signal conf=0.55 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_up/normal/hmm:bull stop=0.60% target=0.90%"}

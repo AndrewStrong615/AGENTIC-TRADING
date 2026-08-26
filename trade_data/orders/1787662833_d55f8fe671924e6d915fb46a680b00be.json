@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-25T13:00:33.966046+00:00", "symbol": "WMT", "action": "buy", "qty": 3, "price": 105.74, "reason": "signal conf=0.54 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=choppy/high/hmm:bull stop=0.60% target=0.90%"}

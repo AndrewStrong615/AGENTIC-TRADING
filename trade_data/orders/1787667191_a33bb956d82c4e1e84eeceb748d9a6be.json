@@ -1,0 +1,1 @@
+{"timestamp": "2026-08-25T14:13:11.942528+00:00", "symbol": "HD", "action": "buy", "qty": 3, "price": 335.555, "reason": "signal conf=0.52 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_up/high/hmm:neutral stop=0.60% target=0.90%"}

@@ -653,6 +653,49 @@ class RiskGate:
     FIXED_TARGET_PCT = _cfg_float("TAKE_PROFIT_PCT", 2.0)
     DEFAULT_EQUITY_ESTIMATE = 10_000.0
 
+    # --- End-of-day liquidation ---
+    # How many minutes before the official market close to force-flatten
+    # every open position, so nothing is ever held overnight. Set to 0 via
+    # env/strategy_config to disable EOD liquidation entirely.
+    EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE = _cfg_int("EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE", 10)
+
+    # --- Intraday / day-trading awareness ---
+    # Beyond just force-closing at the end of the day, the gate now plans
+    # around the fact that every position must be flat before the close:
+    #
+    # 1. NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE: stop opening or adding to
+    #    positions once there isn't enough runway left in the session for
+    #    the trade to plausibly develop before EOD liquidation force-closes
+    #    it. This window is intentionally wider than the liquidation window
+    #    itself (default 30 min vs. 10 min) so a fresh position always has
+    #    at least ~20 minutes to work before it would be swept up.
+    #
+    # 2. Position-size tapering: a trade opened at 9:35am has the whole
+    #    session to develop; one opened at 3:40pm has almost none. Rather
+    #    than sizing both identically, size scales down linearly across the
+    #    session — full size early, down to MIN_SIZE_TAPER_MULTIPLIER by the
+    #    time NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE is reached (at which point
+    #    no new entries happen at all, per #1).
+    #
+    # Set NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE to 0 to disable both behaviors
+    # (equivalent to only the hard EOD liquidation cutoff).
+    NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE = _cfg_int("NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE", 30)
+    # Approximate full regular-session length (NYSE 9:30-16:00 ET = 390 min).
+    # Used only to compute how far through the day we are, for size tapering
+    # — doesn't need to be exact, just a reasonable reference scale.
+    TOTAL_SESSION_MINUTES = _cfg_int("TOTAL_SESSION_MINUTES", 390)
+    # Size multiplier applied once we're right at the no-new-entries cutoff.
+    # 1.0 = no tapering at all; 0.0 would mean "zero size" right before the
+    # cutoff (too aggressive — you'd rather just block the entry). A modest
+    # floor like 0.4 means late-day entries are meaningfully smaller, not
+    # eliminated, while still leaving the hard cutoff in #1 as the real gate.
+    MIN_SIZE_TAPER_MULTIPLIER = _cfg_float("MIN_SIZE_TAPER_MULTIPLIER", 0.4)
+    # How long a fetched market clock stays valid before RiskGate asks
+    # Alpaca again. Evaluate() can be called on every tick, and get_clock()
+    # is a network call — this keeps it cheap without meaningfully hurting
+    # accuracy (clock only matters to within a minute or so here).
+    CLOCK_CACHE_SECONDS = 30
+
     def __init__(self, symbols, api_client=None, trade_log_path="trade_data/trade_log.csv"):
         self.symbols = symbols
         self.api = api_client
@@ -668,6 +711,21 @@ class RiskGate:
         self.trading_halted = False
         self.starting_equity = None
         self.state_lock = threading.Lock()
+
+        # EOD liquidation state. eod_liquidation_active blocks NEW buy
+        # entries once we've flattened for the day; _eod_liquidation_done_date
+        # tracks which calendar date (per the exchange clock) we last ran
+        # liquidation for, so it only fires once per session and resets
+        # automatically the next trading day.
+        self.eod_liquidation_active = False
+        self._eod_liquidation_done_date = None
+
+        # Cached market clock, shared by check_eod_liquidation() and the
+        # intraday no-new-entries / size-taper logic in evaluate() so both
+        # reuse the same cheap, rate-limited clock fetch.
+        self._clock_lock = threading.Lock()
+        self._clock_cache = None
+        self._clock_cache_time = 0.0
 
         self.trade_log_path = trade_log_path
         self._log_lock = threading.Lock()
@@ -836,6 +894,39 @@ class RiskGate:
                     self.entry_target_pct[s] = None
                     self.entry_signal_context[s] = None
                     self.entry_qty[s] = 0
+                else:
+                    self.entry_qty[s] = current_qty
+                    if self.entry_stop_pct[s] is None or self.entry_target_pct[s] is None:
+                        # A position exists on Alpaca but we have no locally
+                        # tracked stop/target for it — this happens for any
+                        # position that was already open when this RiskGate
+                        # instance was constructed (fresh process start,
+                        # restart after a crash, dashboard relaunch, etc.),
+                        # since __init__ starts everyone at None and only
+                        # evaluate() ever sets a real stop/target, at the
+                        # moment THIS process approves a buy.
+                        #
+                        # Without this fallback, the stop-loss/take-profit
+                        # check in evaluate() (`stop_pct is not None and
+                        # target_pct is not None`) silently never fires for
+                        # this symbol, so a losing position can sit
+                        # completely unprotected indefinitely — it only
+                        # exits if the model later fires a strongly
+                        # confident, trend-confirmed "down" signal, or via
+                        # EOD liquidation. Assign the fixed config stop/
+                        # target immediately so it's always protected.
+                        fallback_stop = float(np.clip(
+                            self.FIXED_STOP_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
+                        fallback_target = float(np.clip(
+                            self.FIXED_TARGET_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT * 2))
+                        self.entry_stop_pct[s] = fallback_stop
+                        self.entry_target_pct[s] = fallback_target
+                        log.warning(
+                            f"[{s}] RiskGate: found an open position with no tracked "
+                            f"stop/target (likely after a restart) — applying fallback "
+                            f"stop={fallback_stop:.2f}% target={fallback_target:.2f}% "
+                            f"so it isn't held unprotected."
+                        )
 
                 self._last_known_qty[s] = current_qty
 
@@ -854,13 +945,127 @@ class RiskGate:
                 self.trading_halted = True
                 log.error(f"RiskGate: DAILY LOSS LIMIT HIT ({drawdown_pct:.2f}%). Trading halted for the day.")
 
+    def _get_cached_clock(self):
+        """
+        Fetch Alpaca's market clock, cached for CLOCK_CACHE_SECONDS so that
+        both check_eod_liquidation() (called every ~30s) and evaluate()
+        (potentially called on every tick) can consult "how close is the
+        close?" without hammering the API on every signal.
+        """
+        if self.api is None:
+            return None
+        now = time.time()
+        with self._clock_lock:
+            if self._clock_cache is not None and (now - self._clock_cache_time) < self.CLOCK_CACHE_SECONDS:
+                return self._clock_cache
+        try:
+            clock = self.api.get_clock()
+        except Exception as e:
+            log.error(f"RiskGate: failed to fetch market clock: {e}")
+            return None
+        with self._clock_lock:
+            self._clock_cache = clock
+            self._clock_cache_time = now
+        return clock
+
+    def _minutes_to_close(self):
+        """
+        Minutes remaining until the exchange's official close, or None if
+        the market is currently closed or the clock is unavailable (e.g.
+        api_client not configured, such as in backtesting).
+        """
+        clock = self._get_cached_clock()
+        if clock is None or not clock.is_open:
+            return None
+        return (clock.next_close - clock.timestamp).total_seconds() / 60.0
+
+    def check_eod_liquidation(self):
+        """
+        Force-close every open position shortly before the exchange's
+        official close, so the bot never carries a position overnight.
+
+        Uses Alpaca's clock endpoint (which already accounts for holidays
+        and early closes) rather than a hardcoded local time. Runs at most
+        once per trading day; a new liquidation window opens automatically
+        the next session because `_eod_liquidation_done_date` is compared
+        against the exchange's current date each call.
+        """
+        if self.api is None or self.EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE <= 0:
+            return
+
+        clock = self._get_cached_clock()
+        if clock is None:
+            return
+
+        today = clock.timestamp.date()
+
+        if not clock.is_open:
+            # Outside market hours — clear the "already liquidated" flag once
+            # the date has actually rolled over, so tomorrow's session isn't
+            # accidentally treated as already-done.
+            with self.state_lock:
+                if self._eod_liquidation_done_date is not None and self._eod_liquidation_done_date != today:
+                    self.eod_liquidation_active = False
+            return
+
+        with self.state_lock:
+            already_done_today = self._eod_liquidation_done_date == today
+
+        if already_done_today:
+            return
+
+        minutes_to_close = (clock.next_close - clock.timestamp).total_seconds() / 60.0
+        if minutes_to_close > self.EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE:
+            return
+
+
+        with self.positions_lock:
+            open_symbols = [s for s in self.symbols if self.current_positions.get(s, 0) > 0]
+
+        if not open_symbols:
+            log.info(
+                f"RiskGate: {minutes_to_close:.1f} min to close, no open positions to liquidate."
+            )
+        else:
+            log.warning(
+                f"RiskGate: {minutes_to_close:.1f} min to market close — "
+                f"liquidating {len(open_symbols)} open position(s) to avoid holding overnight: "
+                f"{', '.join(open_symbols)}"
+            )
+            try:
+                self.api.close_all_positions(cancel_orders=True)
+            except Exception as e:
+                log.error(f"RiskGate: close_all_positions failed, falling back to per-symbol close: {e}")
+                for s in open_symbols:
+                    try:
+                        self.api.close_position(s)
+                    except Exception as e2:
+                        log.error(f"[{s}] RiskGate: failed to close position at EOD: {e2}")
+
+            for s in open_symbols:
+                try:
+                    price = float(self.api.get_latest_trade(s).price)
+                except Exception:
+                    price = self.entry_prices.get(s) or 0.0
+                self.record_trade_outcome(s, price, "eod_liquidation")
+
+        with self.state_lock:
+            self.eod_liquidation_active = True
+            self._eod_liquidation_done_date = today
+
+        # Pull fresh position state from Alpaca now that everything should
+        # be flat, so current_positions/entry_prices reflect reality even if
+        # the close_all_positions call above only partially filled.
+        self.refresh_positions()
+
     def background_sync_loop(self, interval=30):
         while True:
             self.refresh_positions()
             self.check_daily_loss_limit()
+            self.check_eod_liquidation()
             time.sleep(interval)
 
-    def _size_position(self, confidence, stop_pct, target_pct, price):
+    def _size_position(self, confidence, stop_pct, target_pct, price, size_multiplier=1.0):
         if stop_pct <= 0:
             return 0
 
@@ -879,10 +1084,39 @@ class RiskGate:
         configured_risk = max(0.0, min(self.RISK_PER_TRADE_PCT, 0.02))
         dollar_risk = min(dollar_risk, equity_estimate * configured_risk)
 
+        # Intraday size taper: scales the risk dollars down (never up) based
+        # on how much of the session is left, so late-day entries — which
+        # have less runway before EOD liquidation forces them closed — are
+        # sized smaller than the same signal would be earlier in the day.
+        size_multiplier = max(0.0, min(1.0, size_multiplier))
+        dollar_risk *= size_multiplier
+
         qty_by_risk = int(dollar_risk / stop_distance)
         qty_by_position = int((equity_estimate * self.MAX_POSITION_PCT) / price) if price > 0 else 0
         qty = min(qty_by_risk, qty_by_position)
         return max(0, min(qty, self.MAX_QTY_PER_ORDER))
+
+    def _intraday_size_multiplier(self, minutes_to_close):
+        """
+        Linear taper from 1.0 (full size) down to MIN_SIZE_TAPER_MULTIPLIER
+        as the session progresses toward the no-new-entries cutoff.
+
+        minutes_to_close is None when the clock is unavailable (e.g. no api
+        client, as in backtesting) — in that case, don't taper at all, since
+        we have no reliable notion of "time left in the session".
+        """
+        if minutes_to_close is None or self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE <= 0:
+            return 1.0
+
+        # How far into the tapering window are we? 0.0 = start of the
+        # session (full session left), 1.0 = right at the no-new-entries
+        # cutoff (minimal size, entries are blocked entirely just past this).
+        usable_minutes = max(self.TOTAL_SESSION_MINUTES - self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE, 1)
+        minutes_used = self.TOTAL_SESSION_MINUTES - minutes_to_close
+        progress = minutes_used / usable_minutes
+        progress = max(0.0, min(1.0, progress))
+
+        return 1.0 - progress * (1.0 - self.MIN_SIZE_TAPER_MULTIPLIER)
 
     def evaluate(self, signal: TradeSignal, current_price: float, now: Optional[float] = None) -> GateDecision:
         if now is None:
@@ -905,6 +1139,10 @@ class RiskGate:
         if self.trading_halted:
             return GateDecision(False, None, None, "daily loss limit halted trading")
 
+        if self.eod_liquidation_active:
+            return GateDecision(False, None, None,
+                                 "EOD liquidation window active — no new positions until next session")
+
         if now - self.last_order_time[symbol] < self.MIN_SECONDS_BETWEEN_ORDERS:
             return GateDecision(False, None, None, "order cooldown active")
 
@@ -926,13 +1164,34 @@ class RiskGate:
             if held >= self.MAX_POSITION_PER_SYMBOL:
                 return GateDecision(False, None, None, "at max position size")
 
+            # Day-trading awareness: don't open or add to a position once
+            # there isn't enough runway left in the session for it to
+            # plausibly develop before EOD liquidation force-closes
+            # everything. This is checked here (not just at liquidation
+            # time) so the bot never enters a trade it already knows will
+            # be swept up in minutes.
+            minutes_to_close = self._minutes_to_close()
+            if minutes_to_close is not None and minutes_to_close < self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE:
+                return GateDecision(
+                    False, None, None,
+                    f"only {minutes_to_close:.0f} min left in session — too close to "
+                    f"EOD liquidation to open/add a new position (cutoff "
+                    f"{self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE} min)"
+                )
+
             if self.ATR_STOP_MULTIPLIER > 0:
                 stop_pct = float(np.clip(signal.atr_pct * self.ATR_STOP_MULTIPLIER, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
                 target_pct = float(np.clip(signal.atr_pct * self.ATR_TARGET_MULTIPLIER, self.MIN_STOP_PCT, self.MAX_STOP_PCT * 2))
             else:
                 stop_pct = float(np.clip(self.FIXED_STOP_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
                 target_pct = float(np.clip(self.FIXED_TARGET_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT * 2))
-            qty = self._size_position(signal.confidence, stop_pct, target_pct, current_price)
+
+            # Size tapers down the later in the session we are (full size
+            # early, smaller near the no-new-entries cutoff) — see
+            # _intraday_size_multiplier for the exact schedule.
+            size_multiplier = self._intraday_size_multiplier(minutes_to_close)
+            qty = self._size_position(signal.confidence, stop_pct, target_pct, current_price,
+                                       size_multiplier=size_multiplier)
             if qty <= 0:
                 return GateDecision(False, None, None, "Kelly-sized position rounded to zero shares — edge too small")
 
@@ -942,11 +1201,13 @@ class RiskGate:
                 self.entry_signal_context[symbol] = signal
                 self.entry_qty[symbol] = qty
             return self._approve(symbol, "buy", qty, now,
-                                  f"signal conf={signal.confidence:.2f} qty={qty} (Kelly-sized) "
+                                  f"signal conf={signal.confidence:.2f} qty={qty} (Kelly-sized, "
+                                  f"intraday size x{size_multiplier:.2f}) "
                                   f"experts=batch:{signal.batch_weight:.2f}/online:{signal.online_weight:.2f}/"
                                   f"markov:{signal.markov_weight:.2f}/meanrev:{signal.meanrev_weight:.2f} "
                                   f"regime={signal.trend_regime}/{signal.volatility_regime}/hmm:{signal.hmm_regime} "
-                                  f"stop={stop_pct:.2f}% target={target_pct:.2f}%")
+                                  f"stop={stop_pct:.2f}% target={target_pct:.2f}% "
+                                  f"mins_to_close={'n/a' if minutes_to_close is None else f'{minutes_to_close:.0f}'}")
 
         if signal.direction == "down" and held > 0:
             qty = held

@@ -39,6 +39,14 @@ from collections import deque
 from datetime import datetime
 
 import pandas as pd
+try:
+    import psutil
+except Exception:
+    psutil = None
+try:
+    import alpaca_trade_api as tradeapi
+except Exception:
+    tradeapi = None
 from flask import (
     Flask,
     jsonify,
@@ -105,7 +113,7 @@ SCRIPTS = {
     "optimizer": {
         "file": "strategy_optimizer.py",
         "label": "Strategy Optimizer",
-        "long_running": False,
+        "long_running": True,
     },
     "bot": {
         "file": "trader_v3.py" if os.path.exists(os.path.join(BASE_DIR, "trader_v3.py")) else "bot.py",
@@ -121,6 +129,63 @@ SCRIPTS = {
 
 RUNS = {}
 RUNS_LOCK = threading.Lock()
+
+_PROCESS_CACHE = {}
+_PROCESS_CACHE_LOCK = threading.Lock()
+
+def _script_matches_commandline(key, cmdline):
+    filename = os.path.basename(SCRIPTS.get(key, {}).get("file", "")).lower()
+    return bool(filename and filename in " ".join(str(x) for x in (cmdline or [])).lower())
+
+def _discover_external_process(key):
+    if not psutil:
+        return None
+    with _PROCESS_CACHE_LOCK:
+        cached = _PROCESS_CACHE.get(key)
+    if cached:
+        try:
+            if psutil.pid_exists(cached["pid"]):
+                return cached
+        except Exception:
+            pass
+    try:
+        for p in psutil.process_iter(["pid", "cmdline", "create_time"]):
+            if p.info["pid"] == os.getpid():
+                continue
+            if _script_matches_commandline(key, p.info.get("cmdline")):
+                found = {
+                    "pid": p.info["pid"],
+                    "started_timestamp": p.info.get("create_time") or time.time(),
+                    "external": True,
+                }
+                with _PROCESS_CACHE_LOCK:
+                    _PROCESS_CACHE[key] = found
+                return found
+    except Exception:
+        pass
+    return None
+
+def _get_script_runtime(key):
+    for r in RUNS.values():
+        if r["script"] == key and r["status"] in ("running", "stopping"):
+            return {
+                "running_id": r["run_id"],
+                "pid": r.get("pid"),
+                "started_timestamp": r.get("started_timestamp"),
+                "external": False,
+                "status": r["status"],
+            }
+    ext = _discover_external_process(key)
+    if ext:
+        return {
+            "running_id": f"external-{ext['pid']}",
+            "pid": ext["pid"],
+            "started_timestamp": ext["started_timestamp"],
+            "external": True,
+            "status": "running",
+        }
+    return None
+
 
 
 # ============================================================================
@@ -191,7 +256,7 @@ def estimated_duration(script_key):
     if script_key == "combine_logs":
         return 30.0
 
-    if script_key == "pre_test":
+    if script_key == "pretest_check":
         return 20.0
 
     return None
@@ -626,8 +691,6 @@ def _reader_thread(run_id, proc):
         entry["returncode"] = proc.returncode
 
         entry["ended_at"] = datetime.now().isoformat()
-        script_label = SCRIPTS[entry["script"]]["label"]
-        notify_run_finished(script_label, entry["status"], entry.get("duration_seconds"))
 
         started = entry.get("started_timestamp")
         ended = time.time()
@@ -642,6 +705,9 @@ def _reader_thread(run_id, proc):
                 entry["script"],
                 duration
             )
+
+        script_label = SCRIPTS[entry["script"]]["label"]
+        notify_run_finished(script_label, entry["status"], entry.get("duration_seconds"))
 
 
 # ============================================================================
@@ -705,53 +771,29 @@ def api_test_notification():
     return jsonify({"sent": True})
 @app.route("/api/scripts")
 def api_scripts():
-
     out = []
-
     for key, cfg in SCRIPTS.items():
-
-        running_id = None
-        running_started = None
-
-        for r in RUNS.values():
-
-            if (
-                r["script"] == key
-                and r["status"] in ("running", "stopping")
-            ):
-
-                running_id = r["run_id"]
-                running_started = r.get(
-                    "started_timestamp"
-                )
-
+        runtime = _get_script_runtime(key)
         estimate = estimated_duration(key)
-
         elapsed = None
         eta = None
-
-        if running_started:
-
-            elapsed = time.time() - running_started
-
+        if runtime and runtime.get("started_timestamp"):
+            elapsed = max(0.0, time.time() - runtime["started_timestamp"])
             if estimate:
-                eta = max(
-                    estimate - elapsed,
-                    0
-                )
-
+                eta = max(estimate - elapsed, 0.0)
         out.append({
             "key": key,
             "label": cfg["label"],
             "long_running": cfg["long_running"],
-            "running_id": running_id,
+            "running_id": runtime.get("running_id") if runtime else None,
+            "pid": runtime.get("pid") if runtime else None,
+            "external": runtime.get("external", False) if runtime else False,
+            "status": runtime.get("status", "idle") if runtime else "idle",
             "estimated_seconds": estimate,
             "elapsed_seconds": elapsed,
             "eta_seconds": eta,
         })
-
     return jsonify(out)
-
 
 @app.route("/api/run/<script_key>", methods=["POST"])
 def api_run(script_key):
@@ -824,6 +866,7 @@ def api_run(script_key):
             "run_id": run_id,
 
             "process": proc,
+            "pid": proc.pid,
 
             "output":
                 deque(maxlen=3000),
@@ -867,56 +910,35 @@ def api_run(script_key):
 
 @app.route("/api/run/<run_id>/stop", methods=["POST"])
 def api_stop(run_id):
-
     entry = RUNS.get(run_id)
+    if entry:
+        if entry["status"] not in ("running", "stopping"):
+            return jsonify({"status": entry["status"]})
+        entry["status"] = "stopping"
+        try:
+            if os.name == "nt":
+                entry["process"].send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                entry["process"].send_signal(signal.SIGINT)
+        except Exception:
+            try:
+                entry["process"].terminate()
+            except Exception:
+                pass
+        return jsonify({"status": "stopping"})
 
-    if not entry:
+    if run_id.startswith("external-"):
+        try:
+            pid = int(run_id.split("-", 1)[1])
+            if not psutil:
+                return jsonify({"error": "psutil is required to stop externally started processes"}), 501
+            p = psutil.Process(pid)
+            p.terminate()
+            return jsonify({"status": "stopping", "external": True, "pid": pid})
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
 
-        return jsonify({
-            "error": "unknown run_id"
-        }), 404
-
-    if entry["status"] not in (
-        "running",
-        "stopping",
-    ):
-
-        return jsonify({
-            "status":
-                entry["status"]
-        })
-
-    entry["status"] = "stopping"
-
-    proc = entry["process"]
-
-    try:
-
-        if os.name == "nt":
-
-            proc.send_signal(
-                signal.CTRL_BREAK_EVENT
-            )
-
-        else:
-
-            proc.send_signal(
-                signal.SIGINT
-            )
-
-    except Exception as e:
-
-        entry["output"].append(
-            "[dashboard] stop signal failed "
-            f"({e}), forcing terminate."
-        )
-
-        proc.terminate()
-
-    return jsonify({
-        "status": "stopping"
-    })
-
+    return jsonify({"error": "unknown run_id"}), 404
 
 @app.route("/api/run/<run_id>/status")
 def api_run_status(run_id):
@@ -1630,6 +1652,12 @@ def _coerce_num(value, default=0.0):
         return default
 
 
+@app.route("/api/analytics/optimizer_live")
+def api_optimizer_live():
+    path = os.path.join(DATA_DIR, "optimizer_live_state.json")
+    state = _read_json_safe(path) or {}
+    return jsonify({"available": bool(state), **state})
+
 @app.route("/api/analytics/optimizer")
 def api_optimizer_analytics():
     history_path = os.path.join(DATA_DIR, "optimizer_history.csv")
@@ -1714,6 +1742,67 @@ def api_model_analytics():
 
     return jsonify(out)
 
+
+@app.route("/api/analytics/alpaca")
+def api_alpaca_live():
+    if tradeapi is None:
+        return jsonify({"available": False, "error": "alpaca_trade_api unavailable"})
+    try:
+        creds = load_credentials()
+        key = creds.get("alpaca_api_key")
+        secret = creds.get("alpaca_secret_key")
+        base = creds.get("alpaca_base_url") or "https://paper-api.alpaca.markets"
+        if not key or not secret:
+            return jsonify({"available": False, "error": "Alpaca credentials not saved"})
+        api_client = tradeapi.REST(key, secret, base, api_version="v2")
+        acct = api_client.get_account()
+
+        positions = []
+        for p in api_client.list_positions():
+            positions.append({
+                "symbol": getattr(p, "symbol", ""),
+                "qty": float(getattr(p, "qty", 0) or 0),
+                "avg_entry_price": float(getattr(p, "avg_entry_price", 0) or 0),
+                "current_price": float(getattr(p, "current_price", 0) or 0),
+                "market_value": float(getattr(p, "market_value", 0) or 0),
+                "unrealized_pl": float(getattr(p, "unrealized_pl", 0) or 0),
+                "unrealized_plpc": float(getattr(p, "unrealized_plpc", 0) or 0) * 100,
+            })
+
+        orders = []
+        try:
+            for o in api_client.list_orders(status="all", limit=25, nested=False):
+                orders.append({
+                    "id": str(getattr(o, "id", "")),
+                    "symbol": getattr(o, "symbol", ""),
+                    "side": getattr(o, "side", ""),
+                    "qty": float(getattr(o, "qty", 0) or 0),
+                    "status": getattr(o, "status", ""),
+                    "filled_qty": float(getattr(o, "filled_qty", 0) or 0),
+                    "filled_avg_price": getattr(o, "filled_avg_price", None),
+                    "submitted_at": str(getattr(o, "submitted_at", "")),
+                    "filled_at": str(getattr(o, "filled_at", "")),
+                })
+        except Exception:
+            pass
+
+        equity = float(getattr(acct, "equity", 0) or 0)
+        last_equity = float(getattr(acct, "last_equity", 0) or 0)
+        day_change = ((equity / last_equity) - 1) * 100 if last_equity else 0.0
+        return jsonify({
+            "available": True,
+            "account": {
+                "equity": equity,
+                "last_equity": last_equity,
+                "day_change_pct": day_change,
+                "cash": float(getattr(acct, "cash", 0) or 0),
+                "buying_power": float(getattr(acct, "buying_power", 0) or 0),
+            },
+            "positions": positions,
+            "orders": orders,
+        })
+    except Exception as exc:
+        return jsonify({"available": False, "error": str(exc)})
 
 @app.route("/api/analytics/portfolio")
 def api_portfolio_analytics():
@@ -1832,6 +1921,13 @@ body{overflow-x:hidden}.app{display:grid;grid-template-columns:250px 1fr;min-hei
     </section>
 
     <section id="page-live" class="page">
+<div class="section grid three">
+        <div class="card"><div class="card-title">Account Equity</div><div id="liveEquity" class="kpi-value">—</div></div>
+        <div class="card"><div class="card-title">Day Change</div><div id="liveDayChange" class="kpi-value">—</div></div>
+        <div class="card"><div class="card-title">Open Positions</div><div id="livePositionsCount" class="kpi-value">—</div></div>
+      </div>
+      <div class="section card"><div class="card-head"><div><div class="card-title">Current Alpaca Positions</div><div class="card-sub">Live broker state, not just completed trade-log entries.</div></div><span class="tag">LIVE</span></div><div id="livePositionsTable"></div></div>
+
       <div class="grid content-grid">
         <div class="card"><div class="card-head"><div><div class="card-title">Live cumulative P&amp;L</div><div class="card-sub">Updates automatically from trade_log.csv</div></div><span class="tag green">LIVE</span></div><div class="chart-wrap"><canvas id="livePnlChart"></canvas></div></div>
         <div class="card"><div class="card-head"><div><div class="card-title">Win / loss mix</div><div class="card-sub">Completed trades</div></div></div><div class="chart-wrap"><canvas id="livePieChart"></canvas></div></div>
@@ -1893,15 +1989,43 @@ const pageMeta={
 };
 function $(id){return document.getElementById(id)}
 function toast(msg){const e=$('toast');e.textContent=msg;e.style.display='block';clearTimeout(window.__toast);window.__toast=setTimeout(()=>e.style.display='none',2800)}
-async function api(url,opts){const r=await fetch(url,opts);if(r.status===401){location.href='/login';return null}if(!r.ok){const t=await r.text();throw new Error(t||r.statusText)}return r}
-function fmtPct(v){const n=Number(v);if(!Number.isFinite(n))return '—';return `${n>=0?'+':''}${n.toFixed(2)}%`}
-function fmt(v,d=2){const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'}
-function destroyChart(id){if(state.charts[id]){state.charts[id].destroy();delete state.charts[id]}}
-function chart(id,type,data,options={}){destroyChart(id);state.charts[id]=new Chart($(id),{type,data,options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#93a0b3',boxWidth:10,font:{size:10}}}},scales:type==='doughnut'?{}:{x:{ticks:{color:'#758399',font:{size:10}},grid:{color:'#192434'}},y:{ticks:{color:'#758399',font:{size:10}},grid:{color:'#192434'}}},...options}});return state.charts[id]}
-function setPage(name){document.querySelectorAll('.page').forEach(e=>e.classList.remove('active'));$('page-'+name).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===name));$('pageTitle').textContent=pageMeta[name][0];$('pageSubtitle').textContent=pageMeta[name][1];location.hash=name;if(name==='live')refreshLive();if(name==='backtest')refreshBacktest();if(name==='optimizer')refreshOptimizer();if(name==='model')refreshModel();if(name==='experiments')refreshHypothesis();if(name==='runs')renderRuns()}
+async function api(url,opts){
+    const r=await fetch(url,opts);
+    if(r.status===401){window.location.href='/login';throw new Error('Authentication required')}
+    if(!r.ok){const t=await r.text();throw new Error(t||r.statusText)}
+    return r;
+}
+function setPage(name){document.querySelectorAll('.page').forEach(e=>e.classList.remove('active'));$('page-'+name).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===name));$('pageTitle').textContent=pageMeta[name][0];$('pageSubtitle').textContent=pageMeta[name][1];location.hash=name;if(name==='live')refreshLive();if(name==='backtest')refreshBacktest();if(name==='optimizer')refreshOptimizer();if(name==='model')refreshModel();if(name==='experiments')refreshHypothesis();if(name==='runs')renderRunCards(state.runs)}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>setPage(b.dataset.page));
 function renderTable(container,rows,columns,empty='No data yet.'){if(!rows||!rows.length){$(container).innerHTML=`<div class="empty">${empty}</div>`;return}let h='<div class="table-wrap"><table class="table"><thead><tr>'+columns.map(c=>`<th>${c.label}</th>`).join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+columns.map(c=>`<td>${c.render?c.render(r):formatCell(r[c.key])}</td>`).join('').replace(/<td>undefined<\/td>/g,'<td>—</td>')+'</tr>').join('')+'</tbody></table></div>';$(container).innerHTML=h}
 function formatCell(v){if(v===null||v===undefined||v==='')return '—';if(typeof v==='number')return Number.isFinite(v)?v.toFixed(3):'—';return String(v)}
+function fmt(v,d=2){if(v===null||v===undefined||v==='')return '—';const n=Number(v);return Number.isFinite(n)?n.toFixed(d):'—'}
+function fmtPct(v){if(v===null||v===undefined||v==='')return '—';const n=Number(v);return Number.isFinite(n)?n.toFixed(2)+'%':'—'}
+function chart(id,type,data,options){
+    const el=$(id);
+    if(!el)return null;
+    const baseOptions={
+        responsive:true,
+        maintainAspectRatio:false,
+        plugins:{legend:{display:!!(data.datasets&&data.datasets.length>1),labels:{color:'#8794a7'}}},
+    };
+    if(type!=='doughnut'&&type!=='pie'){
+        baseOptions.scales={
+            x:{ticks:{color:'#758399'},grid:{color:'#151f2e'}},
+            y:{ticks:{color:'#758399'},grid:{color:'#151f2e'}}
+        };
+    }
+    const merged=Object.assign(baseOptions,options||{});
+    if(state.charts[id]){
+        state.charts[id].config.type=type;
+        state.charts[id].data=data;
+        state.charts[id].options=merged;
+        state.charts[id].update();
+        return state.charts[id];
+    }
+    state.charts[id]=new Chart(el.getContext('2d'),{type,data,options:merged});
+    return state.charts[id];
+}
 async function loadScripts(){try{const r=await api('/api/scripts');const data=await r.json();state.runs=data;updateSystemDot(data);renderRunCards(data);renderOverviewRuns(data);const b=data.find(x=>x.key==='backtest');if(b){$('backtestBadge').textContent=b.running_id?'RUNNING':'IDLE';$('backtestBadge').className='tag '+(b.running_id?'blue':'');$('backtestTiming').textContent=b.running_id?`Elapsed ${fmt(b.elapsed_seconds,0)}s · ETA ${b.eta_seconds==null?'—':fmt(b.eta_seconds,0)+'s'}`:'No active run.'}}catch(e){toast('Could not load script status')}}
 function updateSystemDot(data){const active=data.some(x=>x.running_id);$('systemDot').className='dot '+(active?'ok':'ok')}
 function runButton(key,label){return `<button class="btn primary" onclick="runScript('${key}')">${label}</button>`}
@@ -1913,11 +2037,51 @@ async function selectRun(id){state.selectedRun=id||null;if(id)pollRun(id);else r
 function renderConsole(text,id){$('selectedRunLabel').textContent=id||'None';$('selectedRunConsole').textContent=text||'Select a running or completed process.'}
 async function pollRun(id){try{const r=await api(`/api/run/${id}/status`);const j=await r.json();renderConsole((j.output||[]).join('\n'),id);if(j.status==='running'||j.status==='stopping'){setTimeout(()=>pollRun(id),1200)}else{loadScripts();toast(`${id} ${j.status}`)}}catch(e){renderConsole('Unable to read process output.',id)}}
 async function refreshOverview(){await Promise.allSettled([refreshLive(),refreshBacktest(),refreshOptimizer(),refreshModel(),refreshHypothesis(),loadScripts()]);updateKpis()}
-async function refreshLive(){try{const r=await api('/api/analytics/portfolio');state.live=await r.json();renderLive()}catch(e){}}
-function renderLive(){const d=state.live||{};if(!d.available){$('liveTotal').textContent='—';$('liveAvg').textContent='—';$('liveDD').textContent='—';$('kLivePnl').textContent='—';$('kWinRate').textContent='—';return}$('liveTotal').textContent=fmtPct(d.total_pnl_pct);$('liveAvg').textContent=fmtPct(d.avg_trade_pct);$('liveDD').textContent=fmtPct(d.max_drawdown_pct);$('kLivePnl').textContent=fmtPct(d.total_pnl_pct);$('kWinRate').textContent=fmt(d.win_rate,1)+'%';$('kTrades').textContent=`${d.total_trades} completed trades`;const t=d.timeline||{};chart('livePnlChart','line',{labels:t.timestamps||[],datasets:[{label:'Cumulative P&L %',data:t.cum_pnl||[],borderColor:'#6c8cff',backgroundColor:'rgba(108,140,255,.10)',fill:true,tension:.24,pointRadius:0}]});chart('overviewLiveChart','line',{labels:t.timestamps||[],datasets:[{label:'Cumulative P&L %',data:t.cum_pnl||[],borderColor:'#50c9ff',backgroundColor:'rgba(80,201,255,.08)',fill:true,tension:.24,pointRadius:0}]});const wins=Math.round(d.total_trades*d.win_rate/100),losses=d.total_trades-wins;chart('livePieChart','doughnut',{labels:['Wins','Losses'],datasets:[{data:[wins,losses],backgroundColor:['#2dd78b','#ff6673'],borderWidth:0}]});const rows=(d.trades||[]).slice().reverse();renderTable('liveTradesTable',rows,[{key:'exit_timestamp',label:'Time'},{key:'symbol',label:'Symbol'},{key:'pnl_pct',label:'P&L',render:r=>`<span class="${Number(r.pnl_pct)>=0?'positive':'negative'}">${fmtPct(r.pnl_pct)}</span>`},{key:'exit_reason',label:'Reason'},{key:'entry_confidence',label:'Conf.'},{key:'entry_meta_win_prob',label:'Meta'}]);}
+async function refreshLive(){
+    try{
+        const [pr,ar]=await Promise.all([
+            api('/api/analytics/portfolio'),
+            api('/api/analytics/alpaca')
+        ]);
+        const portfolio=await pr.json();
+        const alpaca=await ar.json();
+        state.live=Object.assign({},portfolio,{alpaca});
+        renderLive();
+    }catch(e){console.error('refreshLive:',e)}
+}
+function renderLive(){
+    const d=state.live||{}, a=d.alpaca||{}, acct=a.account||{}, positions=a.positions||[];
+    const set=(id,v)=>{const el=$(id);if(el)el.textContent=v};
+    set('liveTotal',fmtPct(d.total_pnl_pct));
+    set('liveAvg',fmtPct(d.avg_trade_pct));
+    set('liveDD',fmtPct(d.max_drawdown_pct));
+    set('kLivePnl',fmtPct(d.total_pnl_pct));
+    set('kWinRate',fmt(d.win_rate,1)+'%');
+    set('kTrades',`${d.total_trades||0} completed trades`);
+    set('liveEquity',acct.equity!=null?'$'+Number(acct.equity).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'—');
+    set('liveDayChange',acct.day_change_pct!=null?fmtPct(acct.day_change_pct):'—');
+    set('livePositionsCount',String(positions.length));
+    const t=d.timeline||{};
+    chart('livePnlChart','line',{labels:t.timestamps||[],datasets:[{label:'Cumulative P&L %',data:t.cum_pnl||[],borderColor:'#6c8cff',backgroundColor:'rgba(108,140,255,.1)',fill:true}]});
+    chart('overviewLiveChart','line',{labels:t.timestamps||[],datasets:[{label:'Cumulative P&L %',data:t.cum_pnl||[],borderColor:'#50c9ff',backgroundColor:'rgba(80,201,255,.08)',fill:true}]});
+    const rows=(d.trades||[]).slice().reverse();
+    if(typeof renderTable==='function')renderTable('liveTradesTable',rows,[{key:'exit_timestamp',label:'Time'},{key:'symbol',label:'Symbol'},{key:'pnl_pct',label:'P&L',render:r=>`<span class="${Number(r.pnl_pct)>=0?'positive':'negative'}">${fmtPct(r.pnl_pct)}</span>`},{key:'exit_reason',label:'Reason'}]);
+    if(typeof renderTable==='function')renderTable('livePositionsTable',positions,[{key:'symbol',label:'Symbol'},{key:'qty',label:'Qty'},{key:'avg_entry_price',label:'Entry',render:r=>'$'+fmt(r.avg_entry_price)},{key:'current_price',label:'Current',render:r=>'$'+fmt(r.current_price)},{key:'unrealized_pl',label:'Unrealized P&L',render:r=>`<span class="${Number(r.unrealized_pl)>=0?'positive':'negative'}">$${Number(r.unrealized_pl||0).toFixed(2)}</span>`}],'No open positions.');
+}
 async function refreshBacktest(){try{const [s,l,h]=await Promise.all([api('/api/data/backtest_summary'),api('/api/data/backtest_live'),api('/api/backtests')]);state.backtest={summary:await s.json(),live:await l.json(),history:await h.json()};renderBacktest()}catch(e){}}
 function renderBacktest(){const d=state.backtest?.summary||{};if(!d.available){return}$('kBacktest').textContent=d.returns_pct?.length?fmtPct(d.returns_pct.reduce((a,b)=>a+b,0)/(d.returns_pct.length)): '—';const labels=d.symbols||[];chart('backtestReturnChart','bar',{labels,datasets:[{label:'Return %',data:d.returns_pct||[],backgroundColor:(d.returns_pct||[]).map(v=>Number(v)>=0?'#2dd78b':'#ff6673'),borderRadius:5}]});chart('overviewBacktestChart','bar',{labels,datasets:[{label:'Return %',data:d.returns_pct||[],backgroundColor:'#6c8cff',borderRadius:5}]});chart('backtestWinChart','bar',{labels,datasets:[{label:'Win rate %',data:d.win_rates||[],backgroundColor:'#50c9ff',borderRadius:5}]});const live=state.backtest?.live||{};const eq=live.equity||[];const ts=live.timestamps||[];if(eq.length){$('backtestLiveTag').textContent='LIVE';$('backtestLiveTag').className='tag green';const base=Number(eq[0]||0);const ret=eq.map(v=>base?((Number(v)/base)-1)*100:0);chart('backtestLiveChart','line',{labels:ts,datasets:[{label:'Return %',data:ret,borderColor:'#50c9ff',backgroundColor:'rgba(80,201,255,.08)',fill:true,tension:.2,pointRadius:0}]})}const rows=labels.map((s,i)=>({symbol:s,return:d.returns_pct?.[i],win_rate:d.win_rates?.[i],trades:d.num_trades?.[i]}));renderTable('backtestTable',rows,[{key:'symbol',label:'Symbol'},{key:'return',label:'Return',render:r=>`<span class="${Number(r.return)>=0?'positive':'negative'}">${fmtPct(r.return)}</span>`},{key:'win_rate',label:'Win Rate',render:r=>fmt(r.win_rate,1)+'%'},{key:'trades',label:'Trades'}]);$('backtestHistory').innerHTML=(state.backtest.history||[]).slice(0,30).map(r=>`<div style="padding:11px 0;border-bottom:1px solid #1b2636"><div style="display:flex;justify-content:space-between;gap:10px"><strong>${r.run_id}</strong><span class="tag">${r.summary?.status||'run'}</span></div><div class="muted" style="margin-top:5px;font-size:11px">${r.summary?.completed_at||''}</div><div class="run-actions" style="margin-top:8px"><a class="btn" href="/api/backtests/${r.run_id}/chart" target="_blank">Chart</a><a class="btn" href="/api/backtests/${r.run_id}/results" target="_blank">CSV</a></div></div>`).join('')||'<div class="empty">No archived backtests.</div>'}
-async function refreshOptimizer(){try{const r=await api('/api/analytics/optimizer');state.optimizer=await r.json();renderOptimizer()}catch(e){}}
+async function refreshOptimizer(){
+    try{
+        const [r,lr]=await Promise.all([
+            api('/api/analytics/optimizer'),
+            api('/api/analytics/optimizer_live')
+        ]);
+        state.optimizer=await r.json();
+        state.optimizerLive=await lr.json();
+        renderOptimizer();
+        if(typeof renderOptimizerLive==='function')renderOptimizerLive();
+    }catch(e){console.error('refreshOptimizer:',e)}
+}
 function renderOptimizer(){const d=state.optimizer||{};const trials=d.recent_trials||[];const top=trials.slice(0,24);chart('optimizerScoreChart','scatter',{datasets:[{label:'Trials',data:top.map((r,i)=>({x:i+1,y:Number(r.score)||0})),backgroundColor:'#9a7cff',pointRadius:5}]},{scales:{x:{title:{display:true,text:'Rank',color:'#758399'},ticks:{color:'#758399'},grid:{color:'#192434'}},y:{title:{display:true,text:'Score',color:'#758399'},ticks:{color:'#758399'},grid:{color:'#192434'}}}});const cfg=d.best_config||{};$('currentConfig').innerHTML=Object.keys(cfg).length?Object.entries(cfg).map(([k,v])=>`<div class="config-item"><div class="k">${k}</div><div class="v">${v}</div></div>`).join(''):'<div class="empty">No promoted strategy yet.</div>';renderTable('optimizerTable',trials,[{key:'tested_at',label:'Tested'},{key:'BAR_TIMEFRAME',label:'TF'},{key:'MIN_SIGNAL_CONFIDENCE',label:'Signal'},{key:'MIN_META_WIN_PROB',label:'Meta'},{key:'return',label:'Return',render:r=>fmtPct(r.return)},{key:'sharpe',label:'Sharpe',render:r=>fmt(r.sharpe)},{key:'drawdown',label:'DD',render:r=>fmtPct(r.drawdown)},{key:'score',label:'Score',render:r=>fmt(r.score)}]);renderTable('validationTable',d.validation||[],[{key:'config_id',label:'Config'},{key:'validation_offset',label:'Offset'},{key:'return',label:'Return',render:r=>fmtPct(r.return)},{key:'sharpe',label:'Sharpe',render:r=>fmt(r.sharpe)},{key:'drawdown',label:'DD',render:r=>fmtPct(r.drawdown)},{key:'score',label:'Score',render:r=>fmt(r.score)}]);}
 async function refreshModel(){try{const r=await api('/api/analytics/model');state.model=await r.json();renderModel()}catch(e){}}
 function renderModel(){const d=state.model||{};const m=d.info||{};const vm=m.validation_metrics||{};$('modelStatus').textContent=d.model_exists?'Loaded':'Not trained';$('modelAuc').textContent=vm.auc!=null?fmt(vm.auc,4):'—';$('modelRows').textContent=(d.training_rows||0).toLocaleString();$('kAuc').textContent=vm.auc!=null?fmt(vm.auc,3):'—';$('kTrainRows').textContent=(d.training_rows||0).toLocaleString();const imp=d.feature_importance||[];chart('featureChart','bar',{labels:imp.slice(0,12).map(x=>x.feature),datasets:[{label:'Importance',data:imp.slice(0,12).map(x=>x.importance),backgroundColor:'#6c8cff',borderRadius:4}]},{indexAxis:'y'});const src=d.sources||{};chart('sourceChart','doughnut',{labels:Object.keys(src),datasets:[{data:Object.values(src),backgroundColor:['#6c8cff','#2dd78b','#f2b84b','#9a7cff'],borderWidth:0}]});$('modelDetails').innerHTML=[['Validation accuracy',vm.accuracy],['Balanced accuracy',vm.balanced_accuracy],['Brier score',vm.brier],['Validation rows',m.validation_rows],['Training rows',m.training_rows],['Total completed trades',m.total_completed_trades]].map(([k,v])=>`<div class="config-item"><div class="k">${k}</div><div class="v">${v??'—'}</div></div>`).join('');}

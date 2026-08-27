@@ -48,5 +48,9 @@
   ],
   "optimize_strategy": [
     33.11
+  ],
+  "optimizer": [
+    20962.76,
+    20.8
   ]
 }

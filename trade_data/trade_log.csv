@@ -3295,3 +3295,9 @@ exit_timestamp,symbol,entry_price,exit_price,pnl_pct,exit_reason,entry_confidenc
 ,AVGO,357.98,,,signal conf=0.51 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_up/high/hmm:bull stop=0.60% target=0.90%,0.5064,up,0.2854,high,trending_up,bull,0.71,0.081,0.4429,0.0,0.0,1.0,0.0,0.4478
 ,AVGO,357.63,,,signal conf=0.53 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_up/high/hmm:bear stop=0.60% target=0.90%,0.5254,up,0.3689,high,trending_up,bear,0.5729,0.0736,0.4429,0.0,0.0,1.0,0.0,0.4567
 ,AVGO,357.48,,,signal conf=0.50 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_up/high/hmm:neutral stop=0.60% target=0.90%,0.5,up,0.3604,high,trending_up,neutral,0.5504,0.0779,0.4429,0.0,0.0,1.0,0.0,0.4518
+2026-08-26T12:21:09.277889+00:00,META,565.208241,577.78,2.2243,take-profit hit (0.90%),0.5061,up,0.0391,normal,trending_up,bear,0.6812,0.043,0.1625,0.0,0.0,1.0,0.0,0.4968
+2026-08-26T12:22:11.905561+00:00,ORCL,144.946944,146.71,1.2163,take-profit hit (0.90%),0.5,up,0.0837,high,choppy,neutral,0.9899,0.1595,0.336,0.0,0.0,1.0,0.0,0.5084
+2026-08-26T12:42:15.445904+00:00,NVDA,212.467967,212.78,0.1469,signal conf=0.56,0.5458,up,0.0095,high,trending_up,bull,0.8967,0.0728,0.2555,0.0,0.0,1.0,0.0,0.478
+,AVGO,357.32,,,signal conf=0.50 qty=3 (Kelly-sized) experts=batch:0.00/online:0.00/markov:1.00/meanrev:0.00 regime=trending_up/high/hmm:bear stop=0.60% target=0.90%,0.5,up,0.3332,high,trending_up,bear,0.6984,0.0761,0.6372,0.0,0.0,1.0,0.0,0.4491
+2026-08-26T12:55:38.472260+00:00,NFLX,81.802857,82.29,0.5955,signal conf=0.53,0.5,up,0.1471,high,trending_up,neutral,0.961,0.0646,0.3185,0.0,0.0,1.0,0.0,0.4595
+2026-08-26T12:56:38.406047+00:00,AMD,476.356393,473.49,-0.6017,stop-loss hit (0.60%),0.5,up,0.0898,normal,trending_up,neutral,0.992,0.0698,0.3104,0.0,0.0,1.0,0.0,0.4524

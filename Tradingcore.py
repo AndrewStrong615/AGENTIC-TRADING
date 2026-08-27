@@ -22,7 +22,8 @@ import json
 import uuid
 from dataclasses import dataclass, replace
 from collections import deque
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as dt_time
+from zoneinfo import ZoneInfo
 from notifications import notify_order_placed
 from typing import Optional, Dict
 
@@ -653,48 +654,36 @@ class RiskGate:
     FIXED_TARGET_PCT = _cfg_float("TAKE_PROFIT_PCT", 2.0)
     DEFAULT_EQUITY_ESTIMATE = 10_000.0
 
-    # --- End-of-day liquidation ---
-    # How many minutes before the official market close to force-flatten
-    # every open position, so nothing is ever held overnight. Set to 0 via
-    # env/strategy_config to disable EOD liquidation entirely.
-    EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE = _cfg_int("EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE", 10)
+    # -------------------------------------------------------------------------
+    # Day-trading timing
+    # -------------------------------------------------------------------------
+    # IMPORTANT:
+    # These are NOT loaded from strategy_config.py or optimizer environment
+    # variables. Strategy optimization must never be able to change the
+    # market-hours safety system.
+    MARKET_TIMEZONE_NAME = "America/New_York"
+    MARKET_TIMEZONE = ZoneInfo(MARKET_TIMEZONE_NAME)
 
-    # --- Intraday / day-trading awareness ---
-    # Beyond just force-closing at the end of the day, the gate now plans
-    # around the fact that every position must be flat before the close:
-    #
-    # 1. NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE: stop opening or adding to
-    #    positions once there isn't enough runway left in the session for
-    #    the trade to plausibly develop before EOD liquidation force-closes
-    #    it. This window is intentionally wider than the liquidation window
-    #    itself (default 30 min vs. 10 min) so a fresh position always has
-    #    at least ~20 minutes to work before it would be swept up.
-    #
-    # 2. Position-size tapering: a trade opened at 9:35am has the whole
-    #    session to develop; one opened at 3:40pm has almost none. Rather
-    #    than sizing both identically, size scales down linearly across the
-    #    session — full size early, down to MIN_SIZE_TAPER_MULTIPLIER by the
-    #    time NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE is reached (at which point
-    #    no new entries happen at all, per #1).
-    #
-    # Set NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE to 0 to disable both behaviors
-    # (equivalent to only the hard EOD liquidation cutoff).
-    NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE = _cfg_int("NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE", 30)
-    # Approximate full regular-session length (NYSE 9:30-16:00 ET = 390 min).
-    # Used only to compute how far through the day we are, for size tapering
-    # — doesn't need to be exact, just a reasonable reference scale.
-    TOTAL_SESSION_MINUTES = _cfg_int("TOTAL_SESSION_MINUTES", 390)
-    # Size multiplier applied once we're right at the no-new-entries cutoff.
-    # 1.0 = no tapering at all; 0.0 would mean "zero size" right before the
-    # cutoff (too aggressive — you'd rather just block the entry). A modest
-    # floor like 0.4 means late-day entries are meaningfully smaller, not
-    # eliminated, while still leaving the hard cutoff in #1 as the real gate.
-    MIN_SIZE_TAPER_MULTIPLIER = _cfg_float("MIN_SIZE_TAPER_MULTIPLIER", 0.4)
-    # How long a fetched market clock stays valid before RiskGate asks
-    # Alpaca again. Evaluate() can be called on every tick, and get_clock()
-    # is a network call — this keeps it cheap without meaningfully hurting
-    # accuracy (clock only matters to within a minute or so here).
+    # Regular U.S. equity session.
+    REGULAR_SESSION_OPEN = dt_time(9, 30)
+    REGULAR_SESSION_CLOSE = dt_time(16, 0)
+
+    # Stop entering new positions with 30 minutes left.
+    NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE = 30
+
+    # Begin flattening with 10 minutes left.
+    EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE = 10
+
+    # Emergency/defensive settings.
     CLOCK_CACHE_SECONDS = 30
+    EOD_CLOSE_RETRIES = 3
+    EOD_CLOSE_RETRY_SECONDS = 2
+
+    # Position tapering remains conservative but cannot extend trading past
+    # the hard entry cutoff.
+    MIN_SIZE_TAPER_MULTIPLIER = 0.4
+    TOTAL_SESSION_MINUTES = 390
+
 
     def __init__(self, symbols, api_client=None, trade_log_path="trade_data/trade_log.csv"):
         self.symbols = symbols
@@ -720,16 +709,27 @@ class RiskGate:
         self.eod_liquidation_active = False
         self._eod_liquidation_done_date = None
 
-        # Cached market clock, shared by check_eod_liquidation() and the
-        # intraday no-new-entries / size-taper logic in evaluate() so both
-        # reuse the same cheap, rate-limited clock fetch.
+        # Cached Alpaca clock. It is used only as a validated source for
+        # early-close information and to confirm whether the market is open.
+        # Actual entry/liquidation decisions are anchored to America/New_York.
         self._clock_lock = threading.Lock()
         self._clock_cache = None
         self._clock_cache_time = 0.0
 
+        # Session state.
+        self._session_date = None
+        self._session_close_et = None
+        self._session_open_et = None
+
         self.trade_log_path = trade_log_path
         self._log_lock = threading.Lock()
         self._ensure_trade_log_header()
+
+        try:
+            initial_status = self._session_status()
+            self._log_timing_snapshot(initial_status, prefix="STARTUP")
+        except Exception as e:
+            log.error(f"RiskGate: failed initial session timing check: {e}")
 
     def _ensure_trade_log_header(self):
         # Auto-creates the parent folder (e.g. trade_data/) if it doesn't
@@ -945,124 +945,325 @@ class RiskGate:
                 self.trading_halted = True
                 log.error(f"RiskGate: DAILY LOSS LIMIT HIT ({drawdown_pct:.2f}%). Trading halted for the day.")
 
-    def _get_cached_clock(self):
-        """
-        Fetch Alpaca's market clock, cached for CLOCK_CACHE_SECONDS so that
-        both check_eod_liquidation() (called every ~30s) and evaluate()
-        (potentially called on every tick) can consult "how close is the
-        close?" without hammering the API on every signal.
+    def _get_cached_clock(self, force=False):
+        """Fetch Alpaca's clock with a short cache.
+
+        The clock is never allowed to redefine timezone semantics. All local
+        trading-hour calculations are done in America/New_York.
         """
         if self.api is None:
             return None
+
         now = time.time()
         with self._clock_lock:
-            if self._clock_cache is not None and (now - self._clock_cache_time) < self.CLOCK_CACHE_SECONDS:
+            if (
+                not force
+                and self._clock_cache is not None
+                and (now - self._clock_cache_time) < self.CLOCK_CACHE_SECONDS
+            ):
                 return self._clock_cache
+
         try:
             clock = self.api.get_clock()
         except Exception as e:
-            log.error(f"RiskGate: failed to fetch market clock: {e}")
+            log.error(f"RiskGate: failed to fetch Alpaca market clock: {e}")
             return None
+
         with self._clock_lock:
             self._clock_cache = clock
             self._clock_cache_time = now
+
         return clock
 
-    def _minutes_to_close(self):
+    @classmethod
+    def _now_et(cls):
+        return datetime.now(timezone.utc).astimezone(cls.MARKET_TIMEZONE)
+
+    @staticmethod
+    def _is_weekday(et_now):
+        return et_now.weekday() < 5
+
+    def _refresh_session_schedule(self, et_now=None, force_clock=False):
+        """Build today's session boundaries in Eastern Time.
+
+        Regular close is always 16:00 ET. If Alpaca reports a same-day
+        earlier close (holiday/early-close session), that earlier close is
+        adopted only after sanity-checking it. A malformed/future-day clock
+        cannot move today's schedule to an arbitrary hour.
         """
-        Minutes remaining until the exchange's official close, or None if
-        the market is currently closed or the clock is unavailable (e.g.
-        api_client not configured, such as in backtesting).
+        et_now = et_now or self._now_et()
+        date_key = et_now.date()
+
+        regular_open = datetime.combine(
+            date_key,
+            self.REGULAR_SESSION_OPEN,
+            tzinfo=self.MARKET_TIMEZONE,
+        )
+        regular_close = datetime.combine(
+            date_key,
+            self.REGULAR_SESSION_CLOSE,
+            tzinfo=self.MARKET_TIMEZONE,
+        )
+
+        clock = self._get_cached_clock(force=force_clock)
+
+        session_open = regular_open
+        session_close = regular_close
+
+        if clock is not None:
+            try:
+                clock_open = clock.next_open.astimezone(self.MARKET_TIMEZONE)
+                clock_close = clock.next_close.astimezone(self.MARKET_TIMEZONE)
+            except Exception:
+                clock_open = None
+                clock_close = None
+
+            # If today's market is open, prefer the actual current session's
+            # close when it is today and earlier than the standard 16:00 close.
+            if getattr(clock, "is_open", False) and clock_close is not None:
+                if (
+                    clock_close.date() == date_key
+                    and regular_open <= clock_close <= regular_close
+                ):
+                    session_close = clock_close
+
+            # On a closed day, don't infer today's schedule from tomorrow's
+            # next_open/next_close.
+            #
+            # We intentionally do not adopt arbitrary clock times here.
+
+        self._session_date = date_key
+        self._session_open_et = session_open
+        self._session_close_et = session_close
+
+        return session_open, session_close
+
+    def _session_status(self, et_now=None):
+        """Return authoritative local session status and time-to-close.
+
+        Returns:
+            dict with:
+              et_now
+              is_weekday
+              session_open
+              session_close
+              market_open
+              minutes_to_open
+              minutes_to_close
+              can_enter
+              liquidation_due
         """
+        et_now = et_now or self._now_et()
+        open_et, close_et = self._refresh_session_schedule(et_now)
+
+        weekday = self._is_weekday(et_now)
+
+        # Use Alpaca's is_open as a confirmation when available, but never
+        # allow an invalid clock to create a bizarre cutoff hour.
         clock = self._get_cached_clock()
-        if clock is None or not clock.is_open:
-            return None
-        return (clock.next_close - clock.timestamp).total_seconds() / 60.0
+        alpaca_open = getattr(clock, "is_open", None) if clock is not None else None
+
+        inside_local_session = open_et <= et_now < close_et
+
+        if not weekday:
+            market_open = False
+        elif alpaca_open is True:
+            market_open = inside_local_session
+        elif alpaca_open is False:
+            market_open = False
+        else:
+            # If the API clock is temporarily unavailable, the local
+            # Eastern-time schedule remains the fallback.
+            market_open = inside_local_session
+
+        minutes_to_close = None
+        minutes_to_open = None
+
+        if et_now < open_et:
+            minutes_to_open = (open_et - et_now).total_seconds() / 60.0
+        elif et_now < close_et:
+            minutes_to_close = max(
+                0.0,
+                (close_et - et_now).total_seconds() / 60.0,
+            )
+
+        no_new_entries = (
+            market_open
+            and minutes_to_close is not None
+            and minutes_to_close <= self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE
+        )
+
+        liquidation_due = (
+            market_open
+            and minutes_to_close is not None
+            and minutes_to_close <= self.EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE
+        )
+
+        return {
+            "et_now": et_now,
+            "is_weekday": weekday,
+            "session_open": open_et,
+            "session_close": close_et,
+            "market_open": market_open,
+            "minutes_to_open": minutes_to_open,
+            "minutes_to_close": minutes_to_close,
+            "no_new_entries": no_new_entries,
+            "liquidation_due": liquidation_due,
+        }
+
+    def _minutes_to_close(self):
+        status = self._session_status()
+        return status["minutes_to_close"]
+
+    def _log_timing_snapshot(self, status, prefix="RiskGate"):
+        """Useful diagnostic output without relying on ambiguous local time."""
+        et_now = status["et_now"]
+        close_et = status["session_close"]
+
+        log.info(
+            f"{prefix}: session clock ET={et_now:%Y-%m-%d %H:%M:%S %Z}, "
+            f"open={status['market_open']}, "
+            f"session_close={close_et:%Y-%m-%d %H:%M:%S %Z}, "
+            f"minutes_to_close="
+            f"{'n/a' if status['minutes_to_close'] is None else f'{status['minutes_to_close']:.1f}'}, "
+            f"new_entries_blocked={status['no_new_entries']}, "
+            f"liquidation_due={status['liquidation_due']}"
+        )
 
     def check_eod_liquidation(self):
-        """
-        Force-close every open position shortly before the exchange's
-        official close, so the bot never carries a position overnight.
+        """Flatten every non-zero equity position before the session ends.
 
-        Uses Alpaca's clock endpoint (which already accounts for holidays
-        and early closes) rather than a hardcoded local time. Runs at most
-        once per trading day; a new liquidation window opens automatically
-        the next session because `_eod_liquidation_done_date` is compared
-        against the exchange's current date each call.
+        Timing is based on America/New_York. Alpaca's clock can shorten the
+        session for legitimate early closes, but it cannot arbitrarily move
+        the close to 8 AM or another unrelated hour.
         """
-        if self.api is None or self.EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE <= 0:
+        if self.api is None:
             return
 
-        clock = self._get_cached_clock()
-        if clock is None:
-            return
+        status = self._session_status()
 
-        today = clock.timestamp.date()
+        # Outside the session, reset the completed-day flag when the ET date
+        # changes. This guarantees the next trading day gets a fresh window.
+        today = status["et_now"].date()
 
-        if not clock.is_open:
-            # Outside market hours — clear the "already liquidated" flag once
-            # the date has actually rolled over, so tomorrow's session isn't
-            # accidentally treated as already-done.
+        if not status["market_open"]:
             with self.state_lock:
-                if self._eod_liquidation_done_date is not None and self._eod_liquidation_done_date != today:
+                if (
+                    self._eod_liquidation_done_date is not None
+                    and self._eod_liquidation_done_date != today
+                ):
                     self.eod_liquidation_active = False
+                    self._eod_liquidation_done_date = None
+
             return
 
         with self.state_lock:
-            already_done_today = self._eod_liquidation_done_date == today
+            already_done_today = (
+                self._eod_liquidation_done_date == today
+            )
 
         if already_done_today:
             return
 
-        minutes_to_close = (clock.next_close - clock.timestamp).total_seconds() / 60.0
-        if minutes_to_close > self.EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE:
+        if not status["liquidation_due"]:
             return
 
+        self._log_timing_snapshot(status, prefix="EOD")
 
+        # Include BOTH long and short positions. A day-trading system must
+        # finish completely flat.
         with self.positions_lock:
-            open_symbols = [s for s in self.symbols if self.current_positions.get(s, 0) > 0]
+            open_symbols = [
+                s for s in self.symbols
+                if self.current_positions.get(s, 0) != 0
+            ]
 
         if not open_symbols:
             log.info(
-                f"RiskGate: {minutes_to_close:.1f} min to close, no open positions to liquidate."
+                f"RiskGate: {status['minutes_to_close']:.1f} min to close, "
+                "no open positions to liquidate."
             )
         else:
             log.warning(
-                f"RiskGate: {minutes_to_close:.1f} min to market close — "
-                f"liquidating {len(open_symbols)} open position(s) to avoid holding overnight: "
+                f"RiskGate: {status['minutes_to_close']:.1f} min to close — "
+                f"flattening ALL {len(open_symbols)} open position(s): "
                 f"{', '.join(open_symbols)}"
             )
-            try:
-                self.api.close_all_positions(cancel_orders=True)
-            except Exception as e:
-                log.error(f"RiskGate: close_all_positions failed, falling back to per-symbol close: {e}")
+
+            # Best-effort cancel of outstanding orders first, then close
+            # every position. Retry because an EOD liquidation is safety-
+            # critical and a transient broker/API failure should not end the
+            # attempt after one call.
+            close_error = None
+            for attempt in range(1, self.EOD_CLOSE_RETRIES + 1):
+                try:
+                    try:
+                        self.api.cancel_all_orders()
+                    except Exception:
+                        pass
+
+                    self.api.close_all_positions(cancel_orders=True)
+                    close_error = None
+                    break
+                except Exception as e:
+                    close_error = e
+                    log.error(
+                        f"RiskGate: EOD close attempt {attempt}/"
+                        f"{self.EOD_CLOSE_RETRIES} failed: {e}"
+                    )
+                    if attempt < self.EOD_CLOSE_RETRIES:
+                        time.sleep(self.EOD_CLOSE_RETRY_SECONDS)
+
+            if close_error is not None:
+                # Final per-symbol fallback.
                 for s in open_symbols:
                     try:
                         self.api.close_position(s)
                     except Exception as e2:
-                        log.error(f"[{s}] RiskGate: failed to close position at EOD: {e2}")
+                        log.error(
+                            f"[{s}] RiskGate: final EOD close attempt failed: {e2}"
+                        )
 
-            for s in open_symbols:
-                try:
-                    price = float(self.api.get_latest_trade(s).price)
-                except Exception:
-                    price = self.entry_prices.get(s) or 0.0
-                self.record_trade_outcome(s, price, "eod_liquidation")
+            # Do NOT invent a filled exit price or record a completed trade
+            # before the broker confirms the position is actually gone.
+            self.refresh_positions()
 
         with self.state_lock:
             self.eod_liquidation_active = True
             self._eod_liquidation_done_date = today
 
-        # Pull fresh position state from Alpaca now that everything should
-        # be flat, so current_positions/entry_prices reflect reality even if
-        # the close_all_positions call above only partially filled.
+        # One more synchronization pass to capture any fills that arrived
+        # during the liquidation request.
         self.refresh_positions()
+
+        # Safety check: if anything remains open, continue treating the bot as
+        # flattened for NEW entries but make the problem explicit in logs.
+        with self.positions_lock:
+            remaining = [
+                s for s in self.symbols
+                if self.current_positions.get(s, 0) != 0
+            ]
+
+        if remaining:
+            log.error(
+                "RiskGate: EOD liquidation requested but positions remain open: "
+                + ", ".join(remaining)
+            )
+        else:
+            log.info(
+                f"RiskGate: EOD liquidation complete; account is flat for "
+                f"{today}."
+            )
 
     def background_sync_loop(self, interval=30):
         while True:
-            self.refresh_positions()
-            self.check_daily_loss_limit()
-            self.check_eod_liquidation()
+            try:
+                self.refresh_positions()
+                self.check_daily_loss_limit()
+                self.check_eod_liquidation()
+            except Exception as e:
+                # Timing/safety loop must never die silently.
+                log.exception(f"RiskGate: background safety loop error: {e}")
             time.sleep(interval)
 
     def _size_position(self, confidence, stop_pct, target_pct, price, size_multiplier=1.0):
@@ -1097,24 +1298,22 @@ class RiskGate:
         return max(0, min(qty, self.MAX_QTY_PER_ORDER))
 
     def _intraday_size_multiplier(self, minutes_to_close):
-        """
-        Linear taper from 1.0 (full size) down to MIN_SIZE_TAPER_MULTIPLIER
-        as the session progresses toward the no-new-entries cutoff.
-
-        minutes_to_close is None when the clock is unavailable (e.g. no api
-        client, as in backtesting) — in that case, don't taper at all, since
-        we have no reliable notion of "time left in the session".
-        """
-        if minutes_to_close is None or self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE <= 0:
+        """Conservative size taper during the final 30 minutes."""
+        if minutes_to_close is None:
             return 1.0
 
-        # How far into the tapering window are we? 0.0 = start of the
-        # session (full session left), 1.0 = right at the no-new-entries
-        # cutoff (minimal size, entries are blocked entirely just past this).
-        usable_minutes = max(self.TOTAL_SESSION_MINUTES - self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE, 1)
-        minutes_used = self.TOTAL_SESSION_MINUTES - minutes_to_close
-        progress = minutes_used / usable_minutes
-        progress = max(0.0, min(1.0, progress))
+        if minutes_to_close <= 0:
+            return 0.0
+
+        cutoff = float(self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE)
+
+        # Full size before taper window.
+        if minutes_to_close >= cutoff:
+            return 1.0
+
+        # At/under the no-entry cutoff, entries are blocked by evaluate().
+        usable = max(cutoff, 1.0)
+        progress = max(0.0, min(1.0, (cutoff - minutes_to_close) / usable))
 
         return 1.0 - progress * (1.0 - self.MIN_SIZE_TAPER_MULTIPLIER)
 
@@ -1139,9 +1338,25 @@ class RiskGate:
         if self.trading_halted:
             return GateDecision(False, None, None, "daily loss limit halted trading")
 
+        session = self._session_status()
+
+        # Hard market-hours guard for NEW entries. This is deliberately
+        # independent from strategy confidence and optimizer settings.
+        if not session["market_open"]:
+            return GateDecision(
+                False,
+                None,
+                None,
+                "market session closed — no new entries"
+            )
+
         if self.eod_liquidation_active:
-            return GateDecision(False, None, None,
-                                 "EOD liquidation window active — no new positions until next session")
+            return GateDecision(
+                False,
+                None,
+                None,
+                "EOD liquidation completed — no new positions until next session"
+            )
 
         if now - self.last_order_time[symbol] < self.MIN_SECONDS_BETWEEN_ORDERS:
             return GateDecision(False, None, None, "order cooldown active")
@@ -1170,13 +1385,19 @@ class RiskGate:
             # everything. This is checked here (not just at liquidation
             # time) so the bot never enters a trade it already knows will
             # be swept up in minutes.
-            minutes_to_close = self._minutes_to_close()
-            if minutes_to_close is not None and minutes_to_close < self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE:
+            minutes_to_close = session["minutes_to_close"]
+
+            if (
+                minutes_to_close is None
+                or minutes_to_close <= self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE
+            ):
                 return GateDecision(
-                    False, None, None,
-                    f"only {minutes_to_close:.0f} min left in session — too close to "
-                    f"EOD liquidation to open/add a new position (cutoff "
-                    f"{self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE} min)"
+                    False,
+                    None,
+                    None,
+                    "day-trading entry cutoff active — no new positions "
+                    f"with {self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE} min "
+                    "or less remaining"
                 )
 
             if self.ATR_STOP_MULTIPLIER > 0:
@@ -1227,8 +1448,13 @@ class RiskGate:
             log.error(f"[{symbol}] No api client configured — cannot execute.")
             return
         try:
-            self.api.submit_order(symbol=symbol, qty=decision.qty, side=decision.action,
-                                   type="market", time_in_force="gtc")
+            self.api.submit_order(
+                symbol=symbol,
+                qty=decision.qty,
+                side=decision.action,
+                type="market",
+                time_in_force="day",
+            )
             log.info(f"[{symbol}] ORDER APPROVED & SENT: {decision.action.upper()} "
                       f"{decision.qty} @ ~${price:.2f} — {decision.reason}")
             # Send an immediate notification about the order placement so users

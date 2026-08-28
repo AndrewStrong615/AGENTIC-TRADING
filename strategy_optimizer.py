@@ -307,6 +307,20 @@ def run_backtest(cfg: dict, offset: int, windows: int, days: int, symbols: list[
         except Exception:
             summary = {}
 
+    # A non-zero exit or a missing summary means this trial produced no
+    # usable metrics (it will silently score as 0 below). Surface the
+    # subprocess's own tail of output so a failing candidate is diagnosable
+    # from the optimizer's console log instead of vanishing without a trace.
+    if process.returncode != 0 or not summary:
+        print(
+            f"  WARNING: backtest run {run_id} "
+            f"{'exited with code ' + str(process.returncode) if process.returncode != 0 else 'produced no summary.json'}; "
+            "last output:"
+        )
+        tail = (process.stdout or "").strip().splitlines()[-15:]
+        for line in tail:
+            print(f"    {line}")
+
     result = calculate_metrics(summary)
     result.update(
         {

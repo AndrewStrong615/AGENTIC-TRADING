@@ -126,15 +126,21 @@ log = logging.getLogger("backtest")
 # ALPACA
 # ============================================================================
 
-API_KEY = os.environ.get(
+try:
+    from credentials_store import load_credentials as _load_creds
+    _creds = _load_creds()
+except Exception:
+    _creds = {}
+
+API_KEY = _creds.get("alpaca_api_key") or os.environ.get(
     "ALPACA_API_KEY"
 )
 
-SECRET_KEY = os.environ.get(
+SECRET_KEY = _creds.get("alpaca_secret_key") or os.environ.get(
     "ALPACA_SECRET_KEY"
 )
 
-BASE_URL = os.environ.get(
+BASE_URL = _creds.get("alpaca_base_url") or os.environ.get(
     "ALPACA_BASE_URL",
     "https://paper-api.alpaca.markets",
 )

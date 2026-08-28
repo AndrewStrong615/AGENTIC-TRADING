@@ -1332,13 +1332,14 @@ class RiskGate:
         """Useful diagnostic output without relying on ambiguous local time."""
         et_now = status["et_now"]
         close_et = status["session_close"]
+        minutes_to_close = status["minutes_to_close"]
 
         log.info(
             f"{prefix}: session clock ET={et_now:%Y-%m-%d %H:%M:%S %Z}, "
             f"open={status['market_open']}, "
             f"session_close={close_et:%Y-%m-%d %H:%M:%S %Z}, "
             f"minutes_to_close="
-            f"{'n/a' if status['minutes_to_close'] is None else f'{status['minutes_to_close']:.1f}'}, "
+            f"{'n/a' if minutes_to_close is None else f'{minutes_to_close:.1f}'}, "
             f"new_entries_blocked={status['no_new_entries']}, "
             f"liquidation_due={status['liquidation_due']}"
         )

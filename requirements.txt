@@ -4,6 +4,7 @@ scikit-learn
 joblib
 vaderSentiment
 alpaca_trade_api
+websockets<11,>=9.0
 yfinance
 matplotlib
 pytest

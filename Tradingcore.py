@@ -92,6 +92,31 @@ class TradeSignal:
     meanrev_weight: float
     timestamp: datetime
     meta_win_prob: float = 0.5
+    market_return_pct: float = 0.0
+    qqq_return_pct: float = 0.0
+    market_volatility_proxy: float = 0.0
+    relative_strength_pct: float = 0.0
+    relative_volume_ratio: float = 1.0
+    volume_acceleration: float = 0.0
+    distance_20_high_pct: float = 0.0
+    distance_20_low_pct: float = 0.0
+    distance_50_high_pct: float = 0.0
+    distance_50_low_pct: float = 0.0
+    atr_change_pct: float = 0.0
+    realized_volatility_pct: float = 0.0
+    volatility_percentile: float = 0.5
+    minutes_since_open: float = 0.0
+    minutes_to_close: float = 390.0
+    intraday_return_pct: float = 0.0
+    distance_from_open_pct: float = 0.0
+    opening_range_breakout: float = 0.0
+    gap_pct: float = 0.0
+    cross_section_rank: float = 0.5
+    breadth_pct_up: float = 0.5
+    sector_relative_return_pct: float = 0.0
+    news_count: float = 0.0
+    news_sentiment_change: float = 0.0
+    news_sentiment_dispersion: float = 0.0
 
 
 @dataclass
@@ -106,6 +131,7 @@ class GateDecision:
 # LAYER 1 — MarketDataLayer
 # =============================================================================
 class MarketDataLayer:
+    CONTEXT_SYMBOLS = ("SPY", "QQQ")
     BAR_SECONDS = 60
     MAX_BARS_KEPT = 200
     ATR_PERIOD = 14
@@ -121,29 +147,45 @@ class MarketDataLayer:
     HMM_RETURN_SCALE = 100.0
 
     def __init__(self, symbols, api_client=None):
-        self.symbols = symbols
+        self.symbols = list(symbols)
+        self.context_symbols = [s for s in self.CONTEXT_SYMBOLS if s not in self.symbols]
+        self.all_symbols = list(dict.fromkeys(self.symbols + self.context_symbols))
         self.api = api_client
-        self.bars = {s: deque(maxlen=self.MAX_BARS_KEPT) for s in symbols}
-        self.current_bar: Dict[str, Optional[dict]] = {s: None for s in symbols}
+        self.bars = {s: deque(maxlen=self.MAX_BARS_KEPT) for s in self.all_symbols}
+        self.current_bar: Dict[str, Optional[dict]] = {s: None for s in self.all_symbols}
         self._vader = SentimentIntensityAnalyzer()
-        self.news_sentiment = {s: 0.0 for s in symbols}
+        self.news_sentiment = {s: 0.0 for s in self.all_symbols}
+        self.news_count = {s: 0 for s in self.all_symbols}
+        self.news_dispersion = {s: 0.0 for s in self.all_symbols}
+        self.news_previous_sentiment = {s: 0.0 for s in self.all_symbols}
         self._news_lock = threading.Lock()
         self._bars_lock = threading.Lock()
 
         self._hmm_models = {}
         self._hmm_bars_since_fit = {}
         self._hmm_state_labels = {}
-        self._hmm_last_result = {s: ("unavailable", 0.0) for s in symbols}
+        self._hmm_last_result = {s: ("unavailable", 0.0) for s in self.all_symbols}
 
-        # Increments each time a bar actually CLOSES (a new time bucket
-        # starts), as opposed to every tick. Used by SignalLayer to tell
-        # "a genuinely new bar closed" apart from "another tick arrived
-        # within the same still-forming bar" — ticks now update predictions
-        # live, but training/retraining still happens per real bar, not per tick.
-        self.bar_close_count = {s: 0 for s in symbols}
+        # Increments each time a bar actually CLOSES.  Keep counters for every
+        # symbol in the layer, including context symbols, because the backtest
+        # can seed the whole universe while generating a signal for one symbol.
+        self.bar_close_count = {s: 0 for s in self.all_symbols}
+
+    def _ensure_symbol(self, symbol):
+        """Ensure all per-symbol stores exist before a data operation."""
+        if symbol not in self.bars:
+            self.bars[symbol] = deque(maxlen=self.MAX_BARS_KEPT)
+            self.current_bar[symbol] = None
+            self.news_sentiment[symbol] = 0.0
+            self.news_count[symbol] = 0
+            self.news_dispersion[symbol] = 0.0
+            self.news_previous_sentiment[symbol] = 0.0
+            self._hmm_last_result[symbol] = ("unavailable", 0.0)
+            self.bar_close_count[symbol] = 0
 
     def update_bar(self, symbol, price, size, ts):
         with self._bars_lock:
+            self._ensure_symbol(symbol)
             bucket = int(ts // self.BAR_SECONDS) * self.BAR_SECONDS
             cb = self.current_bar[symbol]
             if cb is None or cb["t"] != bucket:
@@ -162,7 +204,16 @@ class MarketDataLayer:
         # Used by backtesting, where every seeded bar is already "closed" —
         # counts as a bar-close event, same as a live rollover.
         with self._bars_lock:
-            self.bars[symbol].append(bar_dict)
+            self._ensure_symbol(symbol)
+            clean = {
+                "t": float(bar_dict["t"]),
+                "o": float(bar_dict["o"]),
+                "h": float(bar_dict["h"]),
+                "l": float(bar_dict["l"]),
+                "c": float(bar_dict["c"]),
+                "v": float(bar_dict.get("v", 0.0)),
+            }
+            self.bars[symbol].append(clean)
             self.bar_close_count[symbol] = self.bar_close_count.get(symbol, 0) + 1
 
     def get_bars(self, symbol, include_partial=False):
@@ -173,6 +224,7 @@ class MarketDataLayer:
         predictions actually update between bar closes instead of repeating
         a stale value until the next bar completes."""
         with self._bars_lock:
+            self._ensure_symbol(symbol)
             bars = list(self.bars[symbol])
             if include_partial and self.current_bar[symbol] is not None:
                 bars = bars + [dict(self.current_bar[symbol])]
@@ -188,7 +240,7 @@ class MarketDataLayer:
         days = days or self.HISTORY_BOOTSTRAP_DAYS
         end = datetime.now(timezone.utc) - timedelta(minutes=16)
         start = end - timedelta(days=days)
-        for symbol in self.symbols:
+        for symbol in self.all_symbols:
             try:
                 df = self.api.get_bars(symbol, "1Min", start.strftime("%Y-%m-%d"),
                                         end.strftime("%Y-%m-%d"), adjustment="raw", feed="iex").df
@@ -311,28 +363,37 @@ class MarketDataLayer:
             return
         end = datetime.now(timezone.utc)
         start = end - timedelta(hours=self.NEWS_LOOKBACK_HOURS)
-        for symbol in self.symbols:
+        for symbol in self.all_symbols:
             try:
-                articles = self.api.get_news(symbol, start=start.isoformat(), end=end.isoformat(),
-                                              limit=self.NEWS_MAX_ARTICLES)
+                articles=self.api.get_news(symbol,start=start.isoformat(),end=end.isoformat(),limit=self.NEWS_MAX_ARTICLES)
             except Exception as e:
                 log.error(f"[{symbol}] News fetch failed: {e}")
                 continue
-            scores = []
+            scores=[]
             for a in (articles or []):
-                text = f"{getattr(a, 'headline', '') or ''}. {getattr(a, 'summary', '') or ''}".strip()
-                if text:
-                    scores.append(self._vader.polarity_scores(text)["compound"])
-            avg = float(np.mean(scores)) if scores else 0.0
-            self.set_news_sentiment(symbol, avg)
+                text=f"{getattr(a,'headline','') or ''}. {getattr(a,'summary','') or ''}".strip()
+                if text: scores.append(self._vader.polarity_scores(text)["compound"])
+            avg=float(np.mean(scores)) if scores else 0.0
+            disp=float(np.std(scores)) if len(scores)>1 else 0.0
+            with self._news_lock:
+                self.news_previous_sentiment[symbol]=self.news_sentiment.get(symbol,0.0)
+                self.news_sentiment[symbol]=avg
+                self.news_count[symbol]=len(scores)
+                self.news_dispersion[symbol]=disp
 
     def set_news_sentiment(self, symbol, value):
         with self._news_lock:
-            self.news_sentiment[symbol] = value
+            self.news_previous_sentiment[symbol]=self.news_sentiment.get(symbol,0.0)
+            self.news_sentiment[symbol]=float(value)
 
     def get_news_sentiment(self, symbol):
         with self._news_lock:
-            return self.news_sentiment[symbol]
+            return float(self.news_sentiment.get(symbol,0.0))
+
+    def get_news_features(self, symbol):
+        with self._news_lock:
+            s=float(self.news_sentiment.get(symbol,0.0)); p=float(self.news_previous_sentiment.get(symbol,0.0))
+            return {"news_count":float(self.news_count.get(symbol,0)),"news_sentiment_change":s-p,"news_sentiment_dispersion":float(self.news_dispersion.get(symbol,0.0))}
 
     def news_refresher_loop(self):
         while True:
@@ -414,20 +475,125 @@ class SignalLayer:
             log.info(f"SignalLayer: saved expert weights for {len(self.weights)} symbol(s) "
                       f"to {self.weights_path}.")
 
+    FEATURE_NAMES = [
+        "sma_spread_pct","ema_distance_pct","rsi_centered","momentum_pct","rolling_volatility_pct","atr_pct",
+        "market_return_pct","qqq_return_pct","market_volatility_proxy","relative_strength_pct","relative_volume_ratio",
+        "volume_acceleration","distance_20_high_pct","distance_20_low_pct","distance_50_high_pct","distance_50_low_pct",
+        "atr_change_pct","realized_volatility_pct","volatility_percentile","minutes_since_open","minutes_to_close",
+        "intraday_return_pct","distance_from_open_pct","opening_range_breakout","gap_pct","cross_section_rank",
+        "breadth_pct_up","sector_relative_return_pct","news_count","news_sentiment_change","news_sentiment_dispersion",
+    ]
+    SECTOR_GROUPS={
+        "technology":{"AAPL","MSFT","NVDA","AVGO","AMD","MU","CSCO","ORCL"},
+        "consumer":{"AMZN","TSLA","WMT","COST","HD","NFLX"},"financial":{"JPM","V","MA","BAC"},
+        "health":{"JNJ","LLY","ABBV"},"energy":{"XOM"},"industrial":{"CAT"},"communication":{"GOOGL","META"},
+    }
     @staticmethod
-    def _features(bar_list):
-        closes = np.array([b["c"] for b in bar_list], dtype=float)
-        n = len(closes)
-        sma_fast = SignalLayer._sma(closes, 5)
-        sma_slow = SignalLayer._sma(closes, 15)
-        ema_fast = SignalLayer._ema(closes, 5)
-        rsi = SignalLayer._rsi(closes, 14)
-        momentum = np.zeros(n)
-        momentum[5:] = closes[5:] - closes[:-5]
-        vol = np.array([closes[max(0, i - 10 + 1):i + 1].std() for i in range(n)])
-        atr_series = MarketDataLayer._atr_series(bar_list, MarketDataLayer.ATR_PERIOD)
-        atr_pct = np.divide(atr_series, closes, out=np.zeros_like(closes), where=closes != 0) * 100
-        return np.column_stack([sma_fast - sma_slow, ema_fast - closes, rsi - 50, momentum, vol, atr_pct])
+    def _pct(a,b):
+        try:return float((a/b-1)*100) if b else 0.0
+        except:return 0.0
+    @staticmethod
+    def _return(c,lookback=10):
+        return SignalLayer._pct(c[-1],c[-lookback-1]) if len(c)>lookback else 0.0
+    @staticmethod
+    def _session_context(bl):
+        if not bl:return {"minutes_since_open":0.0,"minutes_to_close":390.0,"intraday_return_pct":0.0,"distance_from_open_pct":0.0,"opening_range_breakout":0.0,"gap_pct":0.0}
+        tz=ZoneInfo("America/New_York"); last=datetime.fromtimestamp(float(bl[-1]["t"]),tz=timezone.utc).astimezone(tz); day=last.date(); op=datetime.combine(day,dt_time(9,30),tzinfo=tz); cl=datetime.combine(day,dt_time(16,0),tzinfo=tz)
+        today=[]; prev=[]
+        for b in bl:
+            t=datetime.fromtimestamp(float(b["t"]),tz=timezone.utc).astimezone(tz)
+            if t.date()==day:today.append(b)
+            elif t.date()<day:prev.append(b)
+        day_open=float(today[0]["o"]) if today else float(bl[-1]["o"]); price=float(bl[-1]["c"]); intraday=SignalLayer._pct(price,day_open)
+        opening=[b for b in today if 0<=((datetime.fromtimestamp(float(b["t"]),tz=timezone.utc).astimezone(tz)-op).total_seconds()/60)<15]
+        if opening:
+            hi=max(float(b["h"]) for b in opening); lo=min(float(b["l"]) for b in opening); orb=1.0 if price>hi else (-1.0 if price<lo else 0.0)
+        else:orb=0.0
+        gap=SignalLayer._pct(day_open,float(prev[-1]["c"])) if today and prev else 0.0
+        return {"minutes_since_open":(last-op).total_seconds()/60.0,"minutes_to_close":(cl-last).total_seconds()/60.0,"intraday_return_pct":intraday,"distance_from_open_pct":intraday,"opening_range_breakout":orb,"gap_pct":gap}
+    def _market_features(self, symbol, target_bars):
+        """Build market/context features without ever assuming a symbol exists.
+
+        The backtester can run with a full universe while some symbols have no
+        bars for a particular timestamp.  Missing context is therefore ignored
+        rather than turning into a KeyError or contaminating the feature vector.
+        """
+        target = np.array([b["c"] for b in target_bars], dtype=float)
+        market = 0.0
+        qqq = 0.0
+        mv = 0.0
+
+        spy = self.data.get_bars("SPY", include_partial=True)
+        q = self.data.get_bars("QQQ", include_partial=True)
+
+        if len(spy) > 10:
+            market = self._return(np.array([b["c"] for b in spy], dtype=float))
+        if len(q) > 10:
+            qqq = self._return(np.array([b["c"] for b in q], dtype=float))
+        if len(spy) > 20:
+            c = np.array([b["c"] for b in spy[-50:]], dtype=float)
+            if len(c) > 1:
+                mv = float(np.std(np.diff(c) / np.where(c[:-1] == 0, 1.0, c[:-1])) * 100)
+
+        # Only include symbols for which enough bars are actually available.
+        universe_returns = []
+        for ss in self.data.symbols:
+            bs = self.data.get_bars(ss, include_partial=True)
+            if len(bs) > 10:
+                universe_returns.append(
+                    self._return(np.array([b["c"] for b in bs], dtype=float))
+                )
+
+        if abs(market) < 1e-12 and universe_returns:
+            market = float(np.mean(universe_returns))
+
+        tr = self._return(target)
+        rank = (
+            sum(r < tr for r in universe_returns) / max(len(universe_returns) - 1, 1)
+            if universe_returns else 0.5
+        )
+        breadth = (
+            sum(r > 0 for r in universe_returns) / len(universe_returns)
+            if universe_returns else 0.5
+        )
+
+        sector = 0.0
+        for members in self.SECTOR_GROUPS.values():
+            if symbol in members:
+                peer = []
+                for ss in members - {symbol}:
+                    bs = self.data.get_bars(ss, include_partial=True)
+                    if len(bs) > 10:
+                        peer.append(
+                            self._return(np.array([b["c"] for b in bs], dtype=float))
+                        )
+                if peer:
+                    sector = tr - float(np.mean(peer))
+                break
+
+        return {
+            "market_return_pct": market,
+            "qqq_return_pct": qqq,
+            "market_volatility_proxy": mv,
+            "relative_strength_pct": tr - market,
+            "cross_section_rank": float(np.clip(rank, 0.0, 1.0)),
+            "breadth_pct_up": float(np.clip(breadth, 0.0, 1.0)),
+            "sector_relative_return_pct": sector,
+        }
+    def _features(self,symbol,bl):
+        c=np.array([b["c"] for b in bl],float); h=np.array([b["h"] for b in bl],float); l=np.array([b["l"] for b in bl],float); v=np.array([b.get("v",0) for b in bl],float); n=len(c)
+        sma5=self._sma(c,5)[-1]; sma15=self._sma(c,15)[-1]; ema5=self._ema(c,5)[-1]; rsi=self._rsi(c,14)[-1]; mom=self._return(c,5); roll=float(np.std(c[-10:])/np.mean(c[-10:])*100) if n else 0.0
+        atrs=MarketDataLayer._atr_series(bl,14); atr=float(atrs[-1]/c[-1]*100) if len(atrs) and c[-1] else 0.0
+        avgv=float(np.mean(v[-21:-1])) if n>21 else 0.0; rv=float(v[-1]/avgv) if avgv>0 else 1.0; va=0.0
+        if n>=10:
+            a=float(np.mean(v[-10:-5])); b=float(np.mean(v[-5:])); va=(b/a-1)*100 if a>0 else 0.0
+        d20h=self._pct(c[-1],np.max(h[-20:])); d20l=self._pct(c[-1],np.min(l[-20:])); d50h=self._pct(c[-1],np.max(h[-50:])); d50l=self._pct(c[-1],np.min(l[-50:]))
+        atrchg=0.0
+        if len(atrs)>5 and c[-6] and atrs[-6]:
+            prev=atrs[-6]/c[-6]*100; atrchg=(atr-prev)/prev*100 if prev else 0.0
+        ret=np.diff(c)/np.where(c[:-1]==0,1,c[:-1])*100 if n>1 else np.array([]); realized=float(np.std(ret[-20:])) if len(ret) else 0.0; volpct=float(np.mean(ret[-70:]<=realized)) if len(ret) else 0.5
+        ses=self._session_context(bl); mk=self._market_features(symbol,bl); nf=self.data.get_news_features(symbol)
+        return np.array([self._pct(sma5,sma15),self._pct(ema5,c[-1]),rsi-50,mom,roll,atr,mk["market_return_pct"],mk["qqq_return_pct"],mk["market_volatility_proxy"],mk["relative_strength_pct"],rv,va,d20h,d20l,d50h,d50l,atrchg,realized,volpct,ses["minutes_since_open"],ses["minutes_to_close"],ses["intraday_return_pct"],ses["distance_from_open_pct"],ses["opening_range_breakout"],ses["gap_pct"],mk["cross_section_rank"],mk["breadth_pct_up"],mk["sector_relative_return_pct"],nf["news_count"],nf["news_sentiment_change"],nf["news_sentiment_dispersion"]],float)
 
     @staticmethod
     def _sma(arr, window):
@@ -453,7 +619,7 @@ class SignalLayer:
         return out
 
     def _train_batch(self, symbol, bar_list):
-        X = self._features(bar_list)
+        X = self._features(symbol, bar_list)
         closes = np.array([b["c"] for b in bar_list], dtype=float)
         y = (np.diff(closes) > 0).astype(int)
         X_train = X[:-1]
@@ -510,6 +676,28 @@ class SignalLayer:
         p_up = 1 / (1 + np.exp(self.MEANREV_Z_SCALE * z))
         return float(np.clip(p_up, 0.01, 0.99))
 
+    def _default_weights(self):
+        return {e: 1.0 / len(self.EXPERTS) for e in self.EXPERTS}
+
+    def _normalized_weights(self, symbol):
+        """Return a complete per-symbol weight dict, filling any missing
+        experts with the uniform default. Persisted weights files can be
+        partially populated (older versions, manual edits, a prior crash
+        mid-write), and a missing key would otherwise raise KeyError in
+        generate()/_update_online_and_weights()."""
+        raw = self.weights.get(symbol) or {}
+        result = dict(self._default_weights())
+        for expert in self.EXPERTS:
+            try:
+                result[expert] = float(raw.get(expert, result[expert]))
+            except (TypeError, ValueError):
+                pass  # keep the uniform default for malformed values
+        # Re-normalize in case a stored file had weights that don't sum to 1.
+        total = sum(result.values())
+        if total > 0:
+            result = {e: w / total for e, w in result.items()}
+        return result
+
     def _update_online_and_weights(self, symbol, true_label):
         prev = self.pending.get(symbol)
         if prev is None:
@@ -523,7 +711,7 @@ class SignalLayer:
         else:
             online_model.partial_fit(prev["features"].reshape(1, -1), [true_label])
 
-        weights = self.weights.setdefault(symbol, {e: 1.0 / len(self.EXPERTS) for e in self.EXPERTS})
+        weights = self._normalized_weights(symbol)
         new_weights = {}
         for expert in self.EXPERTS:
             loss = (prev["p_up"][expert] - true_label) ** 2
@@ -566,7 +754,7 @@ class SignalLayer:
 
         # --- live prediction: reflects the current tick's price ---
         live_bars = self.data.get_bars(symbol, include_partial=True) or completed_bars
-        X_live = self._features(live_bars)
+        X_live = self._features(symbol, live_bars)
         latest_X = X_live[-1]
         online_model = self.online_models.get(symbol)
 
@@ -577,7 +765,7 @@ class SignalLayer:
             "meanrev": self._meanrev_p_up(live_bars),
         }
 
-        weights = self.weights.setdefault(symbol, {e: 1.0 / len(self.EXPERTS) for e in self.EXPERTS})
+        weights = self._normalized_weights(symbol)
         blended_p_up = sum(weights[e] * p_up[e] for e in self.EXPERTS)
 
         direction = "up" if blended_p_up >= 0.5 else "down"
@@ -588,6 +776,12 @@ class SignalLayer:
             return p if direction == "up" else (1 - p)
 
         self.pending[symbol] = {"features": latest_X, "p_up": p_up, "bar_close_count": current_count}
+
+        # Ensure a complete, normalized weight row exists for this symbol so
+        # downstream consumers (and the weights autosave) always see all four
+        # experts.
+        if symbol not in self.weights or set(self.weights.get(symbol, {})) != set(self.EXPERTS):
+            self.weights[symbol] = weights
 
         closes_live = np.array([b["c"] for b in live_bars], dtype=float)
         recent = closes_live[-15:]
@@ -600,6 +794,8 @@ class SignalLayer:
         trend_regime = self.data.trend_regime(completed_bars, atr_pct)
         hmm_regime, hmm_prob = self.data.current_hmm_regime(symbol)
         sentiment = self.data.get_news_sentiment(symbol)
+        news_features = self.data.get_news_features(symbol)
+        feature_map = dict(zip(self.FEATURE_NAMES, latest_X.tolist()))
 
         signal = TradeSignal(
             symbol=symbol, direction=direction, confidence=confidence,
@@ -611,6 +807,19 @@ class SignalLayer:
             batch_weight=weights["batch"], online_weight=weights["online"],
             markov_weight=weights["markov"], meanrev_weight=weights["meanrev"],
             timestamp=datetime.now(timezone.utc),
+            market_return_pct=feature_map.get("market_return_pct",0.0), qqq_return_pct=feature_map.get("qqq_return_pct",0.0),
+            market_volatility_proxy=feature_map.get("market_volatility_proxy",0.0), relative_strength_pct=feature_map.get("relative_strength_pct",0.0),
+            relative_volume_ratio=feature_map.get("relative_volume_ratio",1.0), volume_acceleration=feature_map.get("volume_acceleration",0.0),
+            distance_20_high_pct=feature_map.get("distance_20_high_pct",0.0), distance_20_low_pct=feature_map.get("distance_20_low_pct",0.0),
+            distance_50_high_pct=feature_map.get("distance_50_high_pct",0.0), distance_50_low_pct=feature_map.get("distance_50_low_pct",0.0),
+            atr_change_pct=feature_map.get("atr_change_pct",0.0), realized_volatility_pct=feature_map.get("realized_volatility_pct",0.0),
+            volatility_percentile=feature_map.get("volatility_percentile",0.5), minutes_since_open=feature_map.get("minutes_since_open",0.0),
+            minutes_to_close=feature_map.get("minutes_to_close",390.0), intraday_return_pct=feature_map.get("intraday_return_pct",0.0),
+            distance_from_open_pct=feature_map.get("distance_from_open_pct",0.0), opening_range_breakout=feature_map.get("opening_range_breakout",0.0),
+            gap_pct=feature_map.get("gap_pct",0.0), cross_section_rank=feature_map.get("cross_section_rank",0.5),
+            breadth_pct_up=feature_map.get("breadth_pct_up",0.5), sector_relative_return_pct=feature_map.get("sector_relative_return_pct",0.0),
+            news_count=news_features.get("news_count",0.0), news_sentiment_change=news_features.get("news_sentiment_change",0.0),
+            news_sentiment_dispersion=news_features.get("news_sentiment_dispersion",0.0),
         )
 
         # --- meta-labeling adjustment (FIXED: symmetric around 0.5) ---
@@ -747,6 +956,7 @@ class RiskGate:
                     "entry_atr_pct", "entry_news_sentiment",
                     "entry_batch_weight", "entry_online_weight", "entry_markov_weight", "entry_meanrev_weight",
                     "entry_meta_win_prob",
+                    'entry_market_return_pct', 'entry_qqq_return_pct', 'entry_market_volatility_proxy', 'entry_relative_strength_pct', 'entry_relative_volume_ratio', 'entry_volume_acceleration', 'entry_distance_20_high_pct', 'entry_distance_20_low_pct', 'entry_distance_50_high_pct', 'entry_distance_50_low_pct', 'entry_atr_change_pct', 'entry_realized_volatility_pct', 'entry_volatility_percentile', 'entry_minutes_since_open', 'entry_minutes_to_close', 'entry_intraday_return_pct', 'entry_distance_from_open_pct', 'entry_opening_range_breakout', 'entry_gap_pct', 'entry_cross_section_rank', 'entry_breadth_pct_up', 'entry_sector_relative_return_pct', 'entry_news_count', 'entry_news_sentiment_change', 'entry_news_sentiment_dispersion'
                 ])
 
     def record_trade_outcome(self, symbol, exit_price, exit_reason):
@@ -765,8 +975,9 @@ class RiskGate:
                     round(signal.batch_weight, 4), round(signal.online_weight, 4),
                     round(signal.markov_weight, 4), round(signal.meanrev_weight, 4),
                     round(signal.meta_win_prob, 4)]
+            row += [getattr(signal, n, None) for n in ['market_return_pct', 'qqq_return_pct', 'market_volatility_proxy', 'relative_strength_pct', 'relative_volume_ratio', 'volume_acceleration', 'distance_20_high_pct', 'distance_20_low_pct', 'distance_50_high_pct', 'distance_50_low_pct', 'atr_change_pct', 'realized_volatility_pct', 'volatility_percentile', 'minutes_since_open', 'minutes_to_close', 'intraday_return_pct', 'distance_from_open_pct', 'opening_range_breakout', 'gap_pct', 'cross_section_rank', 'breadth_pct_up', 'sector_relative_return_pct', 'news_count', 'news_sentiment_change', 'news_sentiment_dispersion']]
         else:
-            row += [None] * 14
+            row += [None] * 14 + [None] * 25
 
         with self._log_lock:
             with open(self.trade_log_path, "a", newline="") as f:
@@ -788,8 +999,9 @@ class RiskGate:
                     round(signal.batch_weight, 4), round(signal.online_weight, 4),
                     round(signal.markov_weight, 4), round(signal.meanrev_weight, 4),
                     round(signal.meta_win_prob, 4)]
+            row += [getattr(signal, n, None) for n in ['market_return_pct', 'qqq_return_pct', 'market_volatility_proxy', 'relative_strength_pct', 'relative_volume_ratio', 'volume_acceleration', 'distance_20_high_pct', 'distance_20_low_pct', 'distance_50_high_pct', 'distance_50_low_pct', 'atr_change_pct', 'realized_volatility_pct', 'volatility_percentile', 'minutes_since_open', 'minutes_to_close', 'intraday_return_pct', 'distance_from_open_pct', 'opening_range_breakout', 'gap_pct', 'cross_section_rank', 'breadth_pct_up', 'sector_relative_return_pct', 'news_count', 'news_sentiment_change', 'news_sentiment_dispersion']]
         else:
-            row += [None] * 14
+            row += [None] * 14 + [None] * 25
 
         with self._log_lock:
             with open(self.trade_log_path, "a", newline="") as f:
@@ -869,9 +1081,10 @@ class RiskGate:
                             round(previous_signal.markov_weight, 4),
                             round(previous_signal.meanrev_weight, 4),
                             round(previous_signal.meta_win_prob, 4),
+                            previous_signal.market_return_pct, previous_signal.qqq_return_pct, previous_signal.market_volatility_proxy, previous_signal.relative_strength_pct, previous_signal.relative_volume_ratio, previous_signal.volume_acceleration, previous_signal.distance_20_high_pct, previous_signal.distance_20_low_pct, previous_signal.distance_50_high_pct, previous_signal.distance_50_low_pct, previous_signal.atr_change_pct, previous_signal.realized_volatility_pct, previous_signal.volatility_percentile, previous_signal.minutes_since_open, previous_signal.minutes_to_close, previous_signal.intraday_return_pct, previous_signal.distance_from_open_pct, previous_signal.opening_range_breakout, previous_signal.gap_pct, previous_signal.cross_section_rank, previous_signal.breadth_pct_up, previous_signal.sector_relative_return_pct, previous_signal.news_count, previous_signal.news_sentiment_change, previous_signal.news_sentiment_dispersion,
                         ]
                     else:
-                        row += [None] * 14
+                        row += [None] * 14 + [None] * 25
 
                     with self._log_lock:
                         with open(self.trade_log_path, "a", newline="", encoding="utf-8") as f:
@@ -1322,6 +1535,17 @@ class RiskGate:
             now = time.time()
         symbol = signal.symbol
 
+        # Market-hours safety checks must use the evaluation time, not the
+        # caller's wall clock. Backtests pass a historical bar timestamp for
+        # `now`; if we ignored it and used the real current time, every gate
+        # (market open, entry cutoff, EOD taper) would be evaluated against
+        # the moment the backtest RUNS instead of the moment the bar formed —
+        # on weekends/holidays/after-hours runs this silently blocks every
+        # single trade.
+        session = self._session_status(
+            et_now=datetime.fromtimestamp(now, tz=self.MARKET_TIMEZONE)
+        ) if now is not None else self._session_status()
+
         with self.positions_lock:
             held = self.current_positions[symbol]
             entry = self.entry_prices[symbol]
@@ -1337,8 +1561,6 @@ class RiskGate:
 
         if self.trading_halted:
             return GateDecision(False, None, None, "daily loss limit halted trading")
-
-        session = self._session_status()
 
         # Hard market-hours guard for NEW entries. This is deliberately
         # independent from strategy confidence and optimizer settings.

@@ -110,6 +110,8 @@ SYMBOLS = [
 ]
 
 data_layer = MarketDataLayer(SYMBOLS, api_client=api)
+CONTEXT_SYMBOLS = getattr(data_layer, "context_symbols", [])
+STREAM_SYMBOLS = list(dict.fromkeys(SYMBOLS + CONTEXT_SYMBOLS))
 meta_filter = MetaModelFilter(os.path.join(DATA_DIR, "meta_model.joblib"))
 signal_layer = SignalLayer(
     data_layer,
@@ -138,6 +140,8 @@ async def on_trade(trade):
     ts = trade.timestamp.timestamp() if hasattr(trade.timestamp, "timestamp") else time.time()
 
     data_layer.update_bar(symbol, price, size, ts)
+    if symbol not in SYMBOLS:
+        return
     signal = signal_layer.generate(symbol)
     if signal is None:
         return
@@ -159,7 +163,7 @@ def main():
     risk_gate.check_daily_loss_limit()
     data_layer.refresh_news_sentiment()
 
-    for symbol in SYMBOLS:
+    for symbol in STREAM_SYMBOLS:
         stream.subscribe_trades(on_trade, symbol)
 
     threading.Thread(target=risk_gate.background_sync_loop, daemon=True).start()

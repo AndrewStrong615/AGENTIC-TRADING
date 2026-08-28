@@ -20,7 +20,7 @@ MIN_VALIDATION_TRADES=30
 MIN_AUC=0.55
 MIN_AUC_IMPROVEMENT=0.02
 MAX_BRIER_DEGRADATION=0.015
-NUMERIC=["entry_confidence","entry_trend_change_pct","entry_atr_pct","entry_news_sentiment","entry_batch_weight","entry_online_weight","entry_markov_weight","entry_meanrev_weight","entry_hmm_regime_prob"]
+NUMERIC=["entry_confidence","entry_trend_change_pct","entry_atr_pct","entry_news_sentiment","entry_batch_weight","entry_online_weight","entry_markov_weight","entry_meanrev_weight","entry_hmm_regime_prob", 'entry_market_return_pct', 'entry_qqq_return_pct', 'entry_market_volatility_proxy', 'entry_relative_strength_pct', 'entry_relative_volume_ratio', 'entry_volume_acceleration', 'entry_distance_20_high_pct', 'entry_distance_20_low_pct', 'entry_distance_50_high_pct', 'entry_distance_50_low_pct', 'entry_atr_change_pct', 'entry_realized_volatility_pct', 'entry_volatility_percentile', 'entry_minutes_since_open', 'entry_minutes_to_close', 'entry_intraday_return_pct', 'entry_distance_from_open_pct', 'entry_opening_range_breakout', 'entry_gap_pct', 'entry_cross_section_rank', 'entry_breadth_pct_up', 'entry_sector_relative_return_pct', 'entry_news_count', 'entry_news_sentiment_change', 'entry_news_sentiment_dispersion']
 CATEGORICAL=["entry_volatility_regime","entry_trend_regime","entry_hmm_regime"]
 
 def discover_files():

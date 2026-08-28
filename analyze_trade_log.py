@@ -10,27 +10,106 @@ Defaults to trade_data/trade_log.csv if no path is given.
 import os
 import sys
 import csv
+import math
 from collections import defaultdict
 
 import numpy as np
 
 DEFAULT_PATH = os.path.join("trade_data", "trade_log.csv")
 
+# Columns the rest of this script relies on being present in the header.
+REQUIRED_COLUMNS = (
+    "exit_timestamp",
+    "symbol",
+    "pnl_pct",
+    "entry_batch_weight",
+    "entry_online_weight",
+)
+
+
+def _parse_float(value):
+    """Parse a CSV cell as a float, treating blank/None/"None" as missing.
+
+    Returns None for missing values. Raises ValueError for anything else
+    that isn't a finite number (including "nan"/"inf" strings, which
+    `float()` happily accepts but which would silently poison every
+    average downstream).
+    """
+    if value in (None, "", "None"):
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"non-finite value: {value!r}")
+    return parsed
+
 
 def load_rows(path):
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
+
+        if reader.fieldnames is None:
+            # Completely empty file (e.g. touched but never written to) —
+            # treat the same as "no trades yet" rather than an error.
+            return []
+
+        missing_cols = [c for c in REQUIRED_COLUMNS if c not in reader.fieldnames]
+        if missing_cols:
+            raise ValueError(
+                f"'{path}' is missing required column(s): {', '.join(missing_cols)} "
+                f"— found columns: {', '.join(reader.fieldnames)}"
+            )
+
         rows = []
+        skipped_ragged = 0
+        skipped_other = 0
         for r in reader:
+            # csv.DictReader stuffs any columns beyond the header into a
+            # list under the None key. That happens when a row was written
+            # with more fields than the header declares (e.g. the log's
+            # schema grew new columns mid-file without the header being
+            # rewritten). In that case every field from the shifted point
+            # onward is misaligned — e.g. entry_batch_weight/
+            # entry_online_weight would actually hold some other column's
+            # value, which can still parse as a valid float and silently
+            # corrupt the stats below. Skip rows like this outright rather
+            # than trusting the (wrong) positional mapping.
+            if r.get(None) is not None:
+                skipped_ragged += 1
+                continue
+
             try:
-                r["pnl_pct"] = float(r["pnl_pct"])
-                r["entry_batch_weight"] = float(r["entry_batch_weight"]) if r["entry_batch_weight"] not in (None, "", "None") else None
-                r["entry_online_weight"] = float(r["entry_online_weight"]) if r["entry_online_weight"] not in (None, "", "None") else None
+                pnl_pct = _parse_float(r["pnl_pct"])
+                batch_weight = _parse_float(r["entry_batch_weight"])
+                online_weight = _parse_float(r["entry_online_weight"])
             except (TypeError, ValueError):
+                skipped_other += 1
                 continue
-            if r["entry_batch_weight"] is None or r["entry_online_weight"] is None:
+
+            if pnl_pct is None or batch_weight is None or online_weight is None:
+                skipped_other += 1
                 continue
+
+            if not r.get("symbol") or not r.get("exit_timestamp"):
+                skipped_other += 1
+                continue
+
+            r["pnl_pct"] = pnl_pct
+            r["entry_batch_weight"] = batch_weight
+            r["entry_online_weight"] = online_weight
             rows.append(r)
+
+        if skipped_ragged:
+            print(
+                f"Warning: skipped {skipped_ragged} row(s) with more columns than the "
+                f"CSV header declares (likely a schema change mid-file) — their fields "
+                f"could not be trusted."
+            )
+        if skipped_other:
+            print(
+                f"Warning: skipped {skipped_other} row(s) with missing/invalid "
+                f"pnl_pct, ensemble weights, symbol, or exit_timestamp."
+            )
+
         return rows
 
 
@@ -76,5 +155,8 @@ if __name__ == "__main__":
         rows = load_rows(path)
     except FileNotFoundError:
         print(f"No trade log found at '{path}' yet — run the trader or backtest first.")
+        sys.exit(1)
+    except (OSError, ValueError) as e:
+        print(f"Could not read trade log at '{path}': {e}")
         sys.exit(1)
     summarize(rows)

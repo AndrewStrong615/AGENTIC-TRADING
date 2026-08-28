@@ -1,5 +1,5 @@
 """
-preflight_check.py — Run this before starting trader_v3.py, especially on a
+pre_test.py — Run this before starting bot.py, especially on a
 morning you're actually trading. Read-only: never places an order, never
 modifies anything except to confirm trade_data/ exists. Just tells you
 plainly whether you're actually ready to go.
@@ -99,7 +99,7 @@ if api_key and secret_key:
     try:
         clock = api.get_clock()
         if clock.is_open:
-            print(f"\n  Market is currently OPEN.")
+            print("\n  Market is currently OPEN.")
         else:
             print(f"\n  Market is currently CLOSED. Next open: {clock.next_open}")
     except Exception as e:
@@ -122,5 +122,5 @@ if n_fail == 0:
     print("\nLooks ready to go. Warnings above are informational, not blockers.")
     sys.exit(0)
 else:
-    print("\nFix the FAIL items above before starting trader_v3.py.")
+    print("\nFix the FAIL items above before starting bot.py.")
     sys.exit(1)

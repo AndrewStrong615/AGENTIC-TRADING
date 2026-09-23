@@ -5,11 +5,17 @@ when it carried more of the weight.
 
 
 Defaults to trade_data/trade_log.csv if no path is given.
+
+Pass --output-dir <dir> to additionally save matplotlib charts (expert-weight
+evolution over time, win rate by regime, PnL histogram) as PNGs into that
+directory, alongside the usual console text summary. Without --output-dir,
+behavior is unchanged from before (console-only, no matplotlib import).
 """
 
 import os
 import sys
 import csv
+import argparse
 from collections import defaultdict
 
 import numpy as np
@@ -70,11 +76,109 @@ def summarize(rows):
               f"{outcome} {t['pnl_pct']:+.3f}%")
 
 
+def save_charts(rows, output_dir):
+    """Save expert-weight evolution, win-rate-by-regime, and PnL histogram
+    charts as PNGs into output_dir, reusing the same fields already parsed
+    by load_rows() (plus the raw regime strings DictReader gives us for
+    free). No-op (with a message) if there's nothing to plot."""
+    if not rows:
+        print("No rows with recorded ensemble weights found — skipping charts.")
+        return
+
+    # Deferred import so a plain console run pays no matplotlib import cost.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 1. Expert-weight evolution over time.
+    ordered = sorted(rows, key=lambda r: r["exit_timestamp"])
+    batch_weights = [r["entry_batch_weight"] for r in ordered]
+    online_weights = [r["entry_online_weight"] for r in ordered]
+    x = range(len(ordered))
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(x, batch_weights, label="batch weight", linewidth=1)
+    ax.plot(x, online_weights, label="online weight", linewidth=1)
+    ax.set_xlabel("Trade # (chronological)")
+    ax.set_ylabel("Blend weight")
+    ax.set_title("Expert-weight evolution over time")
+    ax.legend()
+    fig.tight_layout()
+    weight_path = os.path.join(output_dir, "weight_evolution.png")
+    fig.savefig(weight_path)
+    plt.close(fig)
+
+    # 2. Win rate by regime (entry_hmm_regime, e.g. bull/bear/neutral).
+    by_regime = defaultdict(list)
+    for r in rows:
+        regime = r.get("entry_hmm_regime") or "unknown"
+        by_regime[regime].append(r)
+
+    regimes = sorted(by_regime.keys())
+    win_pcts = [
+        100 * np.mean([t["pnl_pct"] > 0 for t in by_regime[regime]])
+        for regime in regimes
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.bar(regimes, win_pcts)
+    ax.set_xlabel("Regime (entry_hmm_regime)")
+    ax.set_ylabel("Win rate (%)")
+    ax.set_title("Win rate by regime")
+    ax.set_ylim(0, 100)
+    fig.tight_layout()
+    regime_path = os.path.join(output_dir, "win_rate_by_regime.png")
+    fig.savefig(regime_path)
+    plt.close(fig)
+
+    # 3. PnL histogram.
+    pnl_values = [r["pnl_pct"] for r in rows]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(pnl_values, bins=40)
+    ax.set_xlabel("PnL (%)")
+    ax.set_ylabel("Trade count")
+    ax.set_title("PnL distribution")
+    fig.tight_layout()
+    pnl_path = os.path.join(output_dir, "pnl_histogram.png")
+    fig.savefig(pnl_path)
+    plt.close(fig)
+
+    print(f"\nSaved charts to '{output_dir}':")
+    print(f"  {weight_path}")
+    print(f"  {regime_path}")
+    print(f"  {pnl_path}")
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(
+        description="Analyze a trade log CSV: ensemble blend-weight trends "
+        "and win rates, with optional chart PNGs."
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=DEFAULT_PATH,
+        help=f"Path to trade log CSV (default: {DEFAULT_PATH})",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="If given, also save weight-evolution, win-rate-by-regime, and "
+        "PnL-histogram charts as PNGs into this directory.",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PATH
+    args = parse_args(sys.argv[1:])
     try:
-        rows = load_rows(path)
+        rows = load_rows(args.path)
     except FileNotFoundError:
-        print(f"No trade log found at '{path}' yet — run the trader or backtest first.")
+        print(f"No trade log found at '{args.path}' yet — run the trader or backtest first.")
         sys.exit(1)
     summarize(rows)
+    if args.output_dir:
+        save_charts(rows, args.output_dir)

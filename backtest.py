@@ -1372,10 +1372,15 @@ def fetch_bars(
             if attempt < max_retries:
                 wait = 2 ** attempt
                 print(f"  {symbol}: bars fetch failed ({e.__class__.__name__}), retrying in {wait}s...")
-                notify_error(f"Backtest failed (Run ID: {RUN_ID})", e)
                 time.sleep(wait)
 
+    # Only alert once the retries are actually exhausted. Previously this
+    # fired an "urgent" notification on every transient/retryable failure
+    # (including ones that succeeded on the next attempt) while staying
+    # silent on the final, unrecoverable failure that actually aborts the
+    # backtest — the opposite of what an alert should do.
     if last_error is not None:
+        notify_error(f"Backtest failed (Run ID: {RUN_ID})", last_error)
         raise last_error
     else:
         raise RuntimeError("fetch_bars failed without capturing an exception")

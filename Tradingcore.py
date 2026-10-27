@@ -1,18 +1,3 @@
-"""
-Tradingcore.py — The three-layer architecture, shared by live trading and
-backtesting so both run the exact same logic.
-
-LAYER 1 — MarketDataLayer (deterministic, + HMM regime detection)
-LAYER 2 — SignalLayer (non-deterministic / ML, adaptive 4-expert ensemble
-    + optional meta-labeling filter)
-LAYER 3 — RiskGate (deterministic, unbypassable, Kelly + vol-targeted sizing)
-
-All trade-log output automatically lands in a `trade_data/` folder next to
-this file — RiskGate creates that folder itself the first time it needs it,
-so no manual file-moving is required, regardless of what path a caller
-passes in (as long as it's under trade_data/.
-"""
-
 import time
 import threading
 import logging
@@ -27,8 +12,6 @@ from zoneinfo import ZoneInfo
 from notifications import notify_order_placed
 from typing import Optional, Dict
 
-# Conservative shared strategy configuration. Explicit environment variables
-# (including optimizer trials) take precedence over the saved config.
 try:
     from strategy_config import load_best_config
     _BEST_CONFIG = load_best_config()
@@ -67,9 +50,6 @@ logging.getLogger("hmmlearn.base").setLevel(logging.CRITICAL)
 _hmm_warning_logged = False
 
 
-# =============================================================================
-# Shared data structures
-# =============================================================================
 @dataclass
 class TradeSignal:
     symbol: str
@@ -127,9 +107,6 @@ class GateDecision:
     reason: str
 
 
-# =============================================================================
-# LAYER 1 — MarketDataLayer
-# =============================================================================
 class MarketDataLayer:
     CONTEXT_SYMBOLS = ("SPY", "QQQ")
     BAR_SECONDS = 60
@@ -166,13 +143,9 @@ class MarketDataLayer:
         self._hmm_state_labels = {}
         self._hmm_last_result = {s: ("unavailable", 0.0) for s in self.all_symbols}
 
-        # Increments each time a bar actually CLOSES.  Keep counters for every
-        # symbol in the layer, including context symbols, because the backtest
-        # can seed the whole universe while generating a signal for one symbol.
         self.bar_close_count = {s: 0 for s in self.all_symbols}
 
     def _ensure_symbol(self, symbol):
-        """Ensure all per-symbol stores exist before a data operation."""
         if symbol not in self.bars:
             self.bars[symbol] = deque(maxlen=self.MAX_BARS_KEPT)
             self.current_bar[symbol] = None
@@ -201,8 +174,6 @@ class MarketDataLayer:
                 cb["v"] += size
 
     def seed_bar(self, symbol, bar_dict):
-        # Used by backtesting, where every seeded bar is already "closed" —
-        # counts as a bar-close event, same as a live rollover.
         with self._bars_lock:
             self._ensure_symbol(symbol)
             clean = {
@@ -217,12 +188,6 @@ class MarketDataLayer:
             self.bar_close_count[symbol] = self.bar_close_count.get(symbol, 0) + 1
 
     def get_bars(self, symbol, include_partial=False):
-        """By default returns only COMPLETED bars (unchanged behavior — used
-        for ATR/regime/HMM and for training data). Pass include_partial=True
-        to also get the still-forming current bar appended as the last
-        entry, reflecting the very latest tick — this is what lets live
-        predictions actually update between bar closes instead of repeating
-        a stale value until the next bar completes."""
         with self._bars_lock:
             self._ensure_symbol(symbol)
             bars = list(self.bars[symbol])
@@ -401,9 +366,6 @@ class MarketDataLayer:
             time.sleep(self.NEWS_REFRESH_SECONDS)
 
 
-# =============================================================================
-# LAYER 2 — SignalLayer
-# =============================================================================
 class SignalLayer:
     MIN_BARS_FOR_MODEL = 40
     RETRAIN_EVERY_N_BARS = _cfg_int("RETRAIN_EVERY_N_BARS", 5)
@@ -428,12 +390,6 @@ class SignalLayer:
         self.online_models = {}
         self.bars_since_retrain = {}
 
-        # weights_path: persists WHICH EXPERT TO TRUST across restarts. This
-        # is genuinely part of price prediction (it directly shapes the
-        # blended p_up), unlike the meta_filter above, which only adjusts
-        # confidence afterward. None = don't persist (used in backtesting,
-        # where each iteration/window intentionally starts blank so the
-        # random-seed-averaging methodology stays statistically valid).
         self.weights_path = weights_path
         self._weights_lock = threading.Lock()
         self.weights = self._load_weights() if weights_path else {}
@@ -453,9 +409,6 @@ class SignalLayer:
             return {}
 
     def save_weights(self):
-        """Persists current per-symbol expert-trust weights to disk. Read-
-        modify-write so multiple SignalLayer instances (e.g. one per symbol
-        in some setups) don't clobber each other's entries."""
         if not self.weights_path:
             return
         with self._weights_lock:
@@ -512,12 +465,6 @@ class SignalLayer:
         gap=SignalLayer._pct(day_open,float(prev[-1]["c"])) if today and prev else 0.0
         return {"minutes_since_open":(last-op).total_seconds()/60.0,"minutes_to_close":(cl-last).total_seconds()/60.0,"intraday_return_pct":intraday,"distance_from_open_pct":intraday,"opening_range_breakout":orb,"gap_pct":gap}
     def _market_features(self, symbol, target_bars):
-        """Build market/context features without ever assuming a symbol exists.
-
-        The backtester can run with a full universe while some symbols have no
-        bars for a particular timestamp.  Missing context is therefore ignored
-        rather than turning into a KeyError or contaminating the feature vector.
-        """
         target = np.array([b["c"] for b in target_bars], dtype=float)
         market = 0.0
         qqq = 0.0
@@ -535,7 +482,6 @@ class SignalLayer:
             if len(c) > 1:
                 mv = float(np.std(np.diff(c) / np.where(c[:-1] == 0, 1.0, c[:-1])) * 100)
 
-        # Only include symbols for which enough bars are actually available.
         universe_returns = []
         for ss in self.data.symbols:
             bs = self.data.get_bars(ss, include_partial=True)
@@ -680,19 +626,13 @@ class SignalLayer:
         return {e: 1.0 / len(self.EXPERTS) for e in self.EXPERTS}
 
     def _normalized_weights(self, symbol):
-        """Return a complete per-symbol weight dict, filling any missing
-        experts with the uniform default. Persisted weights files can be
-        partially populated (older versions, manual edits, a prior crash
-        mid-write), and a missing key would otherwise raise KeyError in
-        generate()/_update_online_and_weights()."""
         raw = self.weights.get(symbol) or {}
         result = dict(self._default_weights())
         for expert in self.EXPERTS:
             try:
                 result[expert] = float(raw.get(expert, result[expert]))
             except (TypeError, ValueError):
-                pass  # keep the uniform default for malformed values
-        # Re-normalize in case a stored file had weights that don't sum to 1.
+                pass
         total = sum(result.values())
         if total > 0:
             result = {e: w / total for e, w in result.items()}
@@ -721,18 +661,11 @@ class SignalLayer:
             self.weights[symbol] = {e: w / total for e, w in new_weights.items()}
 
     def generate(self, symbol) -> Optional[TradeSignal]:
-        # completed_bars: only fully-closed bars — used for training labels
-        # and batch retraining, exactly as before. live_bars: completed bars
-        # PLUS the still-forming current bar — used for the actual prediction,
-        # so confidence reflects the latest tick's price, not a stale value
-        # repeated until the next bar closes.
         completed_bars = self.data.get_bars(symbol)
         if len(completed_bars) < self.MIN_BARS_FOR_MODEL:
             return None
         closes_completed = np.array([b["c"] for b in completed_bars], dtype=float)
 
-        # --- learn from the outcome of the PREVIOUS prediction, but only
-        # when a bar has genuinely closed since last time — not every tick ---
         current_count = self.data.get_bar_close_count(symbol)
         prev = self.pending.get(symbol)
         if prev is not None and current_count > prev.get("bar_close_count", -1):
@@ -740,11 +673,10 @@ class SignalLayer:
             self._update_online_and_weights(symbol, true_label)
             self.bars_since_retrain[symbol] = self.bars_since_retrain.get(symbol, self.retrain_every_n_bars) + 1
 
-        # --- periodic batch retrain, still counted in real bars, not ticks ---
         self.bars_since_retrain.setdefault(symbol, self.retrain_every_n_bars)
         batch_model = self.batch_models.get(symbol)
         if batch_model is None or self.bars_since_retrain[symbol] >= self.retrain_every_n_bars:
-            trained = self._train_batch(symbol, completed_bars)  # _train_batch resets the counter internally
+            trained = self._train_batch(symbol, completed_bars)
             if trained is not None:
                 batch_model = trained
                 self.batch_models[symbol] = batch_model
@@ -752,7 +684,6 @@ class SignalLayer:
         if batch_model is None:
             return None
 
-        # --- live prediction: reflects the current tick's price ---
         live_bars = self.data.get_bars(symbol, include_partial=True) or completed_bars
         X_live = self._features(symbol, live_bars)
         latest_X = X_live[-1]
@@ -777,9 +708,6 @@ class SignalLayer:
 
         self.pending[symbol] = {"features": latest_X, "p_up": p_up, "bar_close_count": current_count}
 
-        # Ensure a complete, normalized weight row exists for this symbol so
-        # downstream consumers (and the weights autosave) always see all four
-        # experts.
         if symbol not in self.weights or set(self.weights.get(symbol, {})) != set(self.EXPERTS):
             self.weights[symbol] = weights
 
@@ -822,14 +750,6 @@ class SignalLayer:
             news_sentiment_dispersion=news_features.get("news_sentiment_dispersion",0.0),
         )
 
-        # --- meta-labeling adjustment (FIXED: symmetric around 0.5) ---
-        # meta_prob == 0.5 (untrained/neutral) => no change at all.
-        # meta_prob > 0.5 => stretches confidence away from 0.5 (more sure).
-        # meta_prob < 0.5 => shrinks confidence toward 0.5 (less sure).
-        # (Previously this multiplied confidence by meta_prob directly, which
-        # punished almost every trade even when meta_prob was decent — e.g.
-        # meta_prob=0.65 cut confidence by 35%, making the 0.62 threshold
-        # nearly impossible to clear. That's why no trades were firing.)
         if self.meta_filter is not None and self.meta_filter.available:
             meta_prob = self.meta_filter.score(signal)
             adjustment_factor = min(2 * meta_prob, 2.0)
@@ -839,9 +759,6 @@ class SignalLayer:
         return signal
 
 
-# =============================================================================
-# LAYER 3 — RiskGate
-# =============================================================================
 class RiskGate:
     CONFIDENCE_THRESHOLD = _cfg_float("MIN_SIGNAL_CONFIDENCE", 0.62)
     TREND_AGREEMENT_REQUIRED = True
@@ -863,33 +780,20 @@ class RiskGate:
     FIXED_TARGET_PCT = _cfg_float("TAKE_PROFIT_PCT", 2.0)
     DEFAULT_EQUITY_ESTIMATE = 10_000.0
 
-    # -------------------------------------------------------------------------
-    # Day-trading timing
-    # -------------------------------------------------------------------------
-    # IMPORTANT:
-    # These are NOT loaded from strategy_config.py or optimizer environment
-    # variables. Strategy optimization must never be able to change the
-    # market-hours safety system.
     MARKET_TIMEZONE_NAME = "America/New_York"
     MARKET_TIMEZONE = ZoneInfo(MARKET_TIMEZONE_NAME)
 
-    # Regular U.S. equity session.
     REGULAR_SESSION_OPEN = dt_time(9, 30)
     REGULAR_SESSION_CLOSE = dt_time(16, 0)
 
-    # Stop entering new positions with 30 minutes left.
     NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE = 30
 
-    # Begin flattening with 10 minutes left.
     EOD_LIQUIDATION_MINUTES_BEFORE_CLOSE = 10
 
-    # Emergency/defensive settings.
     CLOCK_CACHE_SECONDS = 30
     EOD_CLOSE_RETRIES = 3
     EOD_CLOSE_RETRY_SECONDS = 2
 
-    # Position tapering remains conservative but cannot extend trading past
-    # the hard entry cutoff.
     MIN_SIZE_TAPER_MULTIPLIER = 0.4
     TOTAL_SESSION_MINUTES = 390
 
@@ -910,22 +814,13 @@ class RiskGate:
         self.starting_equity = None
         self.state_lock = threading.Lock()
 
-        # EOD liquidation state. eod_liquidation_active blocks NEW buy
-        # entries once we've flattened for the day; _eod_liquidation_done_date
-        # tracks which calendar date (per the exchange clock) we last ran
-        # liquidation for, so it only fires once per session and resets
-        # automatically the next trading day.
         self.eod_liquidation_active = False
         self._eod_liquidation_done_date = None
 
-        # Cached Alpaca clock. It is used only as a validated source for
-        # early-close information and to confirm whether the market is open.
-        # Actual entry/liquidation decisions are anchored to America/New_York.
         self._clock_lock = threading.Lock()
         self._clock_cache = None
         self._clock_cache_time = 0.0
 
-        # Session state.
         self._session_date = None
         self._session_close_et = None
         self._session_open_et = None
@@ -941,8 +836,6 @@ class RiskGate:
             log.error(f"RiskGate: failed initial session timing check: {e}")
 
     def _ensure_trade_log_header(self):
-        # Auto-creates the parent folder (e.g. trade_data/) if it doesn't
-        # exist yet — no manual folder setup ever required.
         parent = os.path.dirname(self.trade_log_path)
         if parent:
             os.makedirs(parent, exist_ok=True)
@@ -984,13 +877,7 @@ class RiskGate:
                 csv.writer(f).writerow(row)
 
     def record_open_order(self, symbol, action, qty, price, reason):
-        """
-        Append an "open" order row to the trade log so the dashboard can
-        surface newly placed buy orders immediately. Uses the same column
-        layout as the closed-trade rows but leaves exit fields empty.
-        """
         signal = self.entry_signal_context.get(symbol)
-        # exit_timestamp left empty to indicate an open order
         row = ["", symbol, price, "", "", reason]
         if signal is not None:
             row += [round(signal.confidence, 4), signal.direction, round(signal.trend_change_pct, 4),
@@ -1008,14 +895,6 @@ class RiskGate:
                 csv.writer(f).writerow(row)
 
     def refresh_positions(self):
-        """Synchronize local state with Alpaca and record externally closed positions.
-
-        The old implementation silently cleared local entry state whenever
-        Alpaca reported qty=0. That meant a trade closed by Alpaca, a manual
-        close, or another process never produced a completed row in
-        trade_log.csv. This reconciliation records that close before clearing
-        the entry context.
-        """
         if self.api is None:
             return
         try:
@@ -1037,16 +916,10 @@ class RiskGate:
                 previous_stop = self.entry_stop_pct.get(s)
                 previous_target = self.entry_target_pct.get(s)
 
-            # If a previously-held long position is now flat, Alpaca (or an
-            # external/manual action) closed it. Log the completed outcome using
-            # the actual Alpaca average entry price and the current market/exit
-            # price when available.
             if previous_qty > 0 and current_qty == 0 and previous_entry:
                 try:
                     exit_price = previous_entry
 
-                    # Prefer the latest quote when available. Fall back to the
-                    # stored entry price if quote retrieval fails.
                     try:
                         quote = self.api.get_latest_trade(s)
                         quote_price = getattr(quote, "price", None)
@@ -1110,24 +983,6 @@ class RiskGate:
                 else:
                     self.entry_qty[s] = current_qty
                     if self.entry_stop_pct[s] is None or self.entry_target_pct[s] is None:
-                        # A position exists on Alpaca but we have no locally
-                        # tracked stop/target for it — this happens for any
-                        # position that was already open when this RiskGate
-                        # instance was constructed (fresh process start,
-                        # restart after a crash, dashboard relaunch, etc.),
-                        # since __init__ starts everyone at None and only
-                        # evaluate() ever sets a real stop/target, at the
-                        # moment THIS process approves a buy.
-                        #
-                        # Without this fallback, the stop-loss/take-profit
-                        # check in evaluate() (`stop_pct is not None and
-                        # target_pct is not None`) silently never fires for
-                        # this symbol, so a losing position can sit
-                        # completely unprotected indefinitely — it only
-                        # exits if the model later fires a strongly
-                        # confident, trend-confirmed "down" signal, or via
-                        # EOD liquidation. Assign the fixed config stop/
-                        # target immediately so it's always protected.
                         fallback_stop = float(np.clip(
                             self.FIXED_STOP_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
                         fallback_target = float(np.clip(
@@ -1159,11 +1014,6 @@ class RiskGate:
                 log.error(f"RiskGate: DAILY LOSS LIMIT HIT ({drawdown_pct:.2f}%). Trading halted for the day.")
 
     def _get_cached_clock(self, force=False):
-        """Fetch Alpaca's clock with a short cache.
-
-        The clock is never allowed to redefine timezone semantics. All local
-        trading-hour calculations are done in America/New_York.
-        """
         if self.api is None:
             return None
 
@@ -1197,13 +1047,6 @@ class RiskGate:
         return et_now.weekday() < 5
 
     def _refresh_session_schedule(self, et_now=None, force_clock=False):
-        """Build today's session boundaries in Eastern Time.
-
-        Regular close is always 16:00 ET. If Alpaca reports a same-day
-        earlier close (holiday/early-close session), that earlier close is
-        adopted only after sanity-checking it. A malformed/future-day clock
-        cannot move today's schedule to an arbitrary hour.
-        """
         et_now = et_now or self._now_et()
         date_key = et_now.date()
 
@@ -1231,8 +1074,6 @@ class RiskGate:
                 clock_open = None
                 clock_close = None
 
-            # If today's market is open, prefer the actual current session's
-            # close when it is today and earlier than the standard 16:00 close.
             if getattr(clock, "is_open", False) and clock_close is not None:
                 if (
                     clock_close.date() == date_key
@@ -1240,10 +1081,6 @@ class RiskGate:
                 ):
                     session_close = clock_close
 
-            # On a closed day, don't infer today's schedule from tomorrow's
-            # next_open/next_close.
-            #
-            # We intentionally do not adopt arbitrary clock times here.
 
         self._session_date = date_key
         self._session_open_et = session_open
@@ -1252,27 +1089,11 @@ class RiskGate:
         return session_open, session_close
 
     def _session_status(self, et_now=None):
-        """Return authoritative local session status and time-to-close.
-
-        Returns:
-            dict with:
-              et_now
-              is_weekday
-              session_open
-              session_close
-              market_open
-              minutes_to_open
-              minutes_to_close
-              can_enter
-              liquidation_due
-        """
         et_now = et_now or self._now_et()
         open_et, close_et = self._refresh_session_schedule(et_now)
 
         weekday = self._is_weekday(et_now)
 
-        # Use Alpaca's is_open as a confirmation when available, but never
-        # allow an invalid clock to create a bizarre cutoff hour.
         clock = self._get_cached_clock()
         alpaca_open = getattr(clock, "is_open", None) if clock is not None else None
 
@@ -1285,8 +1106,6 @@ class RiskGate:
         elif alpaca_open is False:
             market_open = False
         else:
-            # If the API clock is temporarily unavailable, the local
-            # Eastern-time schedule remains the fallback.
             market_open = inside_local_session
 
         minutes_to_close = None
@@ -1329,7 +1148,6 @@ class RiskGate:
         return status["minutes_to_close"]
 
     def _log_timing_snapshot(self, status, prefix="RiskGate"):
-        """Useful diagnostic output without relying on ambiguous local time."""
         et_now = status["et_now"]
         close_et = status["session_close"]
         minutes_to_close = status["minutes_to_close"]
@@ -1345,19 +1163,11 @@ class RiskGate:
         )
 
     def check_eod_liquidation(self):
-        """Flatten every non-zero equity position before the session ends.
-
-        Timing is based on America/New_York. Alpaca's clock can shorten the
-        session for legitimate early closes, but it cannot arbitrarily move
-        the close to 8 AM or another unrelated hour.
-        """
         if self.api is None:
             return
 
         status = self._session_status()
 
-        # Outside the session, reset the completed-day flag when the ET date
-        # changes. This guarantees the next trading day gets a fresh window.
         today = status["et_now"].date()
 
         if not status["market_open"]:
@@ -1384,8 +1194,6 @@ class RiskGate:
 
         self._log_timing_snapshot(status, prefix="EOD")
 
-        # Include BOTH long and short positions. A day-trading system must
-        # finish completely flat.
         with self.positions_lock:
             open_symbols = [
                 s for s in self.symbols
@@ -1404,10 +1212,6 @@ class RiskGate:
                 f"{', '.join(open_symbols)}"
             )
 
-            # Best-effort cancel of outstanding orders first, then close
-            # every position. Retry because an EOD liquidation is safety-
-            # critical and a transient broker/API failure should not end the
-            # attempt after one call.
             close_error = None
             for attempt in range(1, self.EOD_CLOSE_RETRIES + 1):
                 try:
@@ -1429,7 +1233,6 @@ class RiskGate:
                         time.sleep(self.EOD_CLOSE_RETRY_SECONDS)
 
             if close_error is not None:
-                # Final per-symbol fallback.
                 for s in open_symbols:
                     try:
                         self.api.close_position(s)
@@ -1438,20 +1241,14 @@ class RiskGate:
                             f"[{s}] RiskGate: final EOD close attempt failed: {e2}"
                         )
 
-            # Do NOT invent a filled exit price or record a completed trade
-            # before the broker confirms the position is actually gone.
             self.refresh_positions()
 
         with self.state_lock:
             self.eod_liquidation_active = True
             self._eod_liquidation_done_date = today
 
-        # One more synchronization pass to capture any fills that arrived
-        # during the liquidation request.
         self.refresh_positions()
 
-        # Safety check: if anything remains open, continue treating the bot as
-        # flattened for NEW entries but make the problem explicit in logs.
         with self.positions_lock:
             remaining = [
                 s for s in self.symbols
@@ -1476,7 +1273,6 @@ class RiskGate:
                 self.check_daily_loss_limit()
                 self.check_eod_liquidation()
             except Exception as e:
-                # Timing/safety loop must never die silently.
                 log.exception(f"RiskGate: background safety loop error: {e}")
             time.sleep(interval)
 
@@ -1495,14 +1291,9 @@ class RiskGate:
         if stop_distance <= 0:
             return 0
 
-        # Conservative hard risk budget from shared strategy config.
         configured_risk = max(0.0, min(self.RISK_PER_TRADE_PCT, 0.02))
         dollar_risk = min(dollar_risk, equity_estimate * configured_risk)
 
-        # Intraday size taper: scales the risk dollars down (never up) based
-        # on how much of the session is left, so late-day entries — which
-        # have less runway before EOD liquidation forces them closed — are
-        # sized smaller than the same signal would be earlier in the day.
         size_multiplier = max(0.0, min(1.0, size_multiplier))
         dollar_risk *= size_multiplier
 
@@ -1512,7 +1303,6 @@ class RiskGate:
         return max(0, min(qty, self.MAX_QTY_PER_ORDER))
 
     def _intraday_size_multiplier(self, minutes_to_close):
-        """Conservative size taper during the final 30 minutes."""
         if minutes_to_close is None:
             return 1.0
 
@@ -1521,11 +1311,9 @@ class RiskGate:
 
         cutoff = float(self.NO_NEW_ENTRIES_MINUTES_BEFORE_CLOSE)
 
-        # Full size before taper window.
         if minutes_to_close >= cutoff:
             return 1.0
 
-        # At/under the no-entry cutoff, entries are blocked by evaluate().
         usable = max(cutoff, 1.0)
         progress = max(0.0, min(1.0, (cutoff - minutes_to_close) / usable))
 
@@ -1536,13 +1324,6 @@ class RiskGate:
             now = time.time()
         symbol = signal.symbol
 
-        # Market-hours safety checks must use the evaluation time, not the
-        # caller's wall clock. Backtests pass a historical bar timestamp for
-        # `now`; if we ignored it and used the real current time, every gate
-        # (market open, entry cutoff, EOD taper) would be evaluated against
-        # the moment the backtest RUNS instead of the moment the bar formed —
-        # on weekends/holidays/after-hours runs this silently blocks every
-        # single trade.
         session = self._session_status(
             et_now=datetime.fromtimestamp(now, tz=self.MARKET_TIMEZONE)
         ) if now is not None else self._session_status()
@@ -1563,8 +1344,6 @@ class RiskGate:
         if self.trading_halted:
             return GateDecision(False, None, None, "daily loss limit halted trading")
 
-        # Hard market-hours guard for NEW entries. This is deliberately
-        # independent from strategy confidence and optimizer settings.
         if not session["market_open"]:
             return GateDecision(
                 False,
@@ -1602,12 +1381,6 @@ class RiskGate:
             if held >= self.MAX_POSITION_PER_SYMBOL:
                 return GateDecision(False, None, None, "at max position size")
 
-            # Day-trading awareness: don't open or add to a position once
-            # there isn't enough runway left in the session for it to
-            # plausibly develop before EOD liquidation force-closes
-            # everything. This is checked here (not just at liquidation
-            # time) so the bot never enters a trade it already knows will
-            # be swept up in minutes.
             minutes_to_close = session["minutes_to_close"]
 
             if (
@@ -1630,9 +1403,6 @@ class RiskGate:
                 stop_pct = float(np.clip(self.FIXED_STOP_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT))
                 target_pct = float(np.clip(self.FIXED_TARGET_PCT, self.MIN_STOP_PCT, self.MAX_STOP_PCT * 2))
 
-            # Size tapers down the later in the session we are (full size
-            # early, smaller near the no-new-entries cutoff) — see
-            # _intraday_size_multiplier for the exact schedule.
             size_multiplier = self._intraday_size_multiplier(minutes_to_close)
             qty = self._size_position(signal.confidence, stop_pct, target_pct, current_price,
                                        size_multiplier=size_multiplier)
@@ -1680,17 +1450,11 @@ class RiskGate:
             )
             log.info(f"[{symbol}] ORDER APPROVED & SENT: {decision.action.upper()} "
                       f"{decision.qty} @ ~${price:.2f} — {decision.reason}")
-            # Send an immediate notification about the order placement so users
-            # know when an order has actually been sent from the system.
             try:
                 notify_order_placed(symbol, decision.action, decision.qty, price, decision.reason)
             except Exception:
                 pass
 
-            # Also write a small per-order JSON file into the same data folder so
-            # dashboards/watchers that avoid reading a single locked file can
-            # pick up this event reliably. This is a best-effort, non-blocking
-            # write — failures are ignored so live trading is not disrupted.
             try:
                 orders_dir = os.path.join(os.path.dirname(self.trade_log_path) or '.', 'orders')
                 os.makedirs(orders_dir, exist_ok=True)
@@ -1711,7 +1475,6 @@ class RiskGate:
             if decision.action == "sell":
                 self.record_trade_outcome(symbol, price, decision.reason)
             elif decision.action == "buy":
-                # Log open buy orders so they appear immediately on the dashboard
                 try:
                     self.record_open_order(symbol, decision.action, decision.qty, price, decision.reason)
                 except Exception:

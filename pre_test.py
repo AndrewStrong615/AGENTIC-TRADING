@@ -1,3 +1,11 @@
+"""
+preflight_check.py — Run this before starting trader_v3.py, especially on a
+morning you're actually trading. Read-only: never places an order, never
+modifies anything except to confirm trade_data/ exists. Just tells you
+plainly whether you're actually ready to go.
+
+"""
+
 import os
 import sys
 
@@ -7,7 +15,7 @@ PASS = "  [OK]  "
 FAIL = "  [FAIL]"
 WARN = "  [WARN]"
 
-results = []
+results = []  # (level, message)
 
 
 def check(label, ok, detail=""):
@@ -22,6 +30,7 @@ def warn(label, detail=""):
 
 print("Running preflight checks...\n")
 
+# --- 1. Environment variables ---
 api_key = os.environ.get("ALPACA_API_KEY")
 secret_key = os.environ.get("ALPACA_SECRET_KEY")
 base_url = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets/v2")
@@ -34,6 +43,7 @@ if not is_paper:
     warn("BASE_URL does NOT look like a paper endpoint",
          "double-check this isn't pointed at a live-money account")
 
+# --- 2. Required packages importable ---
 required_packages = {
     "alpaca_trade_api": "alpaca-trade-api",
     "sklearn": "scikit-learn",
@@ -50,6 +60,7 @@ for module_name, pip_name in required_packages.items():
     except ImportError:
         check(f"Package '{pip_name}' importable", False, f"run: pip install {pip_name}")
 
+# --- 3. Required local files present ---
 for fname in ["Tradingcore.py", "meta_filter.py", "bot.py"]:
     check(f"{fname} present in this folder", os.path.exists(fname))
 
@@ -68,6 +79,7 @@ if os.path.exists(weights_path):
 else:
     warn("No persisted expert weights yet", "first run will start all 4 experts at equal trust — expected on a first-ever run")
 
+# --- 4. API connectivity + account check (read-only) ---
 if api_key and secret_key:
     try:
         import alpaca_trade_api as tradeapi
@@ -95,6 +107,7 @@ if api_key and secret_key:
 else:
     check("Connected to Alpaca API", False, "skipped — API keys not set")
 
+# --- Summary ---
 print(f"\n{'=' * 60}")
 print("PREFLIGHT SUMMARY")
 print(f"{'=' * 60}")

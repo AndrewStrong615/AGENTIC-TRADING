@@ -1,3 +1,7 @@
+# Monitor threshold configuration
+# If the total return drops by this percent (relative to baseline), trigger an incident
 total_return_drop_pct: 20
+# If max drawdown magnitude increases by this percent (relative to baseline), trigger
 drawdown_increase_pct: 15
+# If win rate drops by this percent (relative to baseline), trigger
 win_rate_drop_pct: 10

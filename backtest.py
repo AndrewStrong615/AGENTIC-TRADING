@@ -1,3 +1,26 @@
+"""
+backtest.py — Walk-forward backtest using the ACTUAL three-layer system
+from Tradingcore.py.
+
+Dashboard features added:
+    - Persistent backtest job state
+    - Live progress: AAPL 3/8, etc.
+    - Live elapsed / estimated remaining time
+    - Live equity / return curve
+    - Live drawdown curve
+    - Live SPY comparison
+    - Running / Complete / Failed status
+    - Clear completion message
+    - Automatic saving of every backtest
+    - Historical backtest archive
+    - Safe dashboard reconnect after leaving the page
+
+All generated backtest files are stored under trade_data/.
+
+The backtest itself is an independent Python process. The dashboard only
+reads its state, so navigating away from the dashboard does NOT stop it.
+"""
+
 import os
 import json
 import socket
@@ -28,16 +51,17 @@ try:
         import alpaca_trade_api as tradeapi
         from alpaca_trade_api.rest import TimeFrame
     except Exception:
-        tradeapi = None
+        tradeapi = None  # type: Any
         TimeFrame: Any = None
 
+    # yfinance optional import
     try:
-        import yfinance as yf
+        import yfinance as yf  # type: ignore
     except Exception:
-        yf = None
+        yf = None  # type: Any
 
 except Exception:
-    tradeapi = None
+    tradeapi = None  # type: Any
     TimeFrame: Any = None
 
 
@@ -50,6 +74,10 @@ from Tradingcore import (
 )
 from meta_filter import MetaModelFilter
 
+
+# ============================================================================
+# DIRECTORIES / FILES
+# ============================================================================
 
 DATA_DIR = "trade_data"
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -83,12 +111,20 @@ LATEST_CHART_PATH = os.path.join(
 )
 
 
+# ============================================================================
+# LOGGING
+# ============================================================================
+
 logging.basicConfig(
     level=logging.WARNING
 )
 
 log = logging.getLogger("backtest")
 
+
+# ============================================================================
+# ALPACA
+# ============================================================================
 
 try:
     from credentials_store import load_credentials as _load_creds
@@ -134,6 +170,10 @@ except Exception as e:
     api = None
 
 
+# ============================================================================
+# META MODEL
+# ============================================================================
+
 meta_filter = MetaModelFilter(
     os.path.join(
         DATA_DIR,
@@ -141,6 +181,10 @@ meta_filter = MetaModelFilter(
     )
 )
 
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 
 SYMBOLS = [
         "AAPL",
@@ -190,6 +234,10 @@ COMMISSION_PER_SHARE = 0.005
 SLIPPAGE_PCT = 0.02
 
 
+# ============================================================================
+# FAST MODE
+# ============================================================================
+
 FAST_BACKTEST = str(
     os.environ.get(
         "FAST_BACKTEST",
@@ -222,6 +270,10 @@ if FAST_BACKTEST:
     SLEEP_BETWEEN_SYMBOLS = 0.1
 
 
+# ============================================================================
+# JOB STATE
+# ============================================================================
+
 RUN_ID = os.environ.get(
     "BACKTEST_RUN_ID"
 ) or uuid.uuid4().hex[:12]
@@ -243,15 +295,21 @@ def utc_now():
 
 def atomic_json_write(path, data):
 
+    # Ensure parent folder exists
     parent = os.path.dirname(path)
     if parent:
         try:
             os.makedirs(parent, exist_ok=True)
         except Exception:
+            # If we cannot create the directory, there's nothing we can do here
             log.warning("atomic_json_write: failed to ensure parent directory %s", parent)
             return
 
-    CLEANUP_AGE_SECONDS = 300
+    # Cleanup old temp files left by previous runs in the same directory.
+    # Only remove files older than CLEANUP_AGE_SECONDS to avoid racing with
+    # other active processes. This keeps trade_data tidy when the dashboard
+    # repeatedly locks the live files.
+    CLEANUP_AGE_SECONDS = 300  # 5 minutes
     try:
         now_ts = time.time()
         for pattern in ("*.tmp.*", "*.tmp"):
@@ -260,28 +318,35 @@ def atomic_json_write(path, data):
                     if now_ts - os.path.getmtime(fname) > CLEANUP_AGE_SECONDS:
                         os.remove(fname)
                 except Exception:
+                    # Ignore any issues inspecting/removing individual files
                     pass
     except Exception:
+        # Non-fatal cleanup errors should not stop the backtest
         pass
 
+    # Use a unique temp filename to avoid clashing with other writers that
+    # may hold a handle to a .tmp file (Windows tends to lock files).*
     unique_tmp = f"{path}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
 
     try:
         with open(unique_tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
     except PermissionError:
+        # Could not create the tmp file (likely a lock or permission issue).
         log.warning(
             "atomic_json_write: cannot write temp file %s (PermissionError); skipping live update",
             unique_tmp,
         )
         return
     except Exception:
+        # Unexpected error while writing tmp; ensure cleanup then re-raise
         try:
             os.remove(unique_tmp)
         except Exception:
             pass
         raise
 
+    # Try replacing atomically with retries (helps with transient locks).
     replace_attempts = 5
     backoff = 0.1
     replaced = False
@@ -295,6 +360,7 @@ def atomic_json_write(path, data):
             time.sleep(backoff)
             backoff *= 2
         except Exception:
+            # Unexpected error — cleanup tmp and re-raise
             try:
                 os.remove(unique_tmp)
             except Exception:
@@ -304,6 +370,7 @@ def atomic_json_write(path, data):
     if replaced:
         return
 
+    # If replace never succeeded, try direct write with retries.
     log.warning(
         "atomic_json_write: os.replace failed after %d attempts; destination %s may be locked — attempting direct write with retries",
         replace_attempts,
@@ -324,6 +391,7 @@ def atomic_json_write(path, data):
             time.sleep(backoff)
             backoff *= 2
         except Exception:
+            # Unexpected error — cleanup tmp and re-raise
             try:
                 os.remove(unique_tmp)
             except Exception:
@@ -337,6 +405,7 @@ def atomic_json_write(path, data):
             pass
         return
 
+    # If we reach here, both atomic replace and direct writes failed after retries.
     log.warning(
         "atomic_json_write: all attempts to write %s failed (file likely locked); leaving temp file %s for inspection and continuing",
         path,
@@ -527,6 +596,10 @@ def update_job(
     )
 
 
+# ============================================================================
+# LIVE DATA
+# ============================================================================
+
 def write_live_data(
     equity_curve=None,
     timestamps=None,
@@ -599,6 +672,8 @@ def write_live_data(
         payload,
     )
 
+    # Also write to the per-run live file so the dashboard can read the latest
+    # update even if the shared LIVE_DATA_PATH is locked by another process.
     atomic_json_write(
         os.path.join(
             RUN_DIR,
@@ -607,6 +682,10 @@ def write_live_data(
         payload,
     )
 
+
+# ============================================================================
+# PROGRESS ESTIMATION
+# ============================================================================
 
 JOB_STARTED_AT = time.time()
 
@@ -669,6 +748,10 @@ def update_progress(
     )
 
 
+# ============================================================================
+# RISK GATE
+# ============================================================================
+
 class BacktestRiskGate(RiskGate):
 
     def __init__(
@@ -702,6 +785,9 @@ class BacktestRiskGate(RiskGate):
             for s in symbols
         }
 
+        # Re-declare and initialize commonly used mappings with explicit
+        # typing so static analyzers (Pylance) understand these dicts hold
+        # Optional[float] values rather than being None-only.
         self.current_positions: Dict[str, int] = {s: 0 for s in symbols}
         self.entry_prices: Dict[str, Optional[float]] = {s: None for s in symbols}
         self.entry_stop_pct: Dict[str, Optional[float]] = {s: None for s in symbols}
@@ -728,6 +814,7 @@ class BacktestRiskGate(RiskGate):
         if not decision.approved:
             return
 
+        # Normalize qty to an integer to avoid Optional[int] arithmetic warnings
         qty = int(decision.qty or 0)
 
         slippage_frac = (
@@ -769,6 +856,14 @@ class BacktestRiskGate(RiskGate):
                 prev_cost_per_share = self.entry_cost_per_share.get(symbol)
                 new_cost_per_share = eff_price + COMMISSION_PER_SHARE
 
+                # BUGFIX: this used to unconditionally overwrite
+                # entry_prices/entry_cost_per_share with only the newest
+                # fill's price. Any position built up across more than one
+                # buy (RiskGate allows topping up to MAX_POSITION_PER_SYMBOL)
+                # silently lost track of its true average cost basis, which
+                # threw off every later stop-loss/take-profit % check and
+                # the recorded PnL for that position. Blend into a
+                # quantity-weighted average instead.
                 if prev_qty > 0 and prev_entry_price is not None:
                     blended_entry_price = (
                         (prev_entry_price * prev_qty) + (eff_price * qty)
@@ -793,7 +888,7 @@ class BacktestRiskGate(RiskGate):
 
                 self.entry_cost_per_share[
                     symbol
-                ] = blended_cost_per_share
+                ] = blended_cost_per_share  # type: ignore[assignment]
 
 
         elif decision.action == "sell":
@@ -1115,6 +1210,10 @@ class BacktestRiskGate(RiskGate):
                 )
 
 
+# ============================================================================
+# WEIGHTS
+# ============================================================================
+
 def load_persisted_weights(
     weights_path,
 ):
@@ -1143,6 +1242,10 @@ def load_persisted_weights(
 
         return {}
 
+
+# ============================================================================
+# MARKET DATA
+# ============================================================================
 
 def fetch_bars(
     symbol,
@@ -1279,6 +1382,7 @@ def fetch_bars(
 
 
 def _normalize_market_dataframe(df, symbol):
+    """Normalize OHLCV data before it enters the simulation."""
     if df is None or df.empty:
         raise ValueError(f"No bar data available for {symbol}.")
 
@@ -1310,6 +1414,11 @@ def _normalize_market_dataframe(df, symbol):
         raise ValueError(f"{symbol}: no valid OHLCV rows after normalization.")
     return out
 
+
+
+# ============================================================================
+# SENTIMENT
+# ============================================================================
 
 def fetch_daily_sentiment(
     symbol,
@@ -1431,6 +1540,10 @@ def fetch_daily_sentiment(
     }
 
 
+# ============================================================================
+# DRAWDOWN
+# ============================================================================
+
 def calculate_drawdown(
     equity_curve,
 ):
@@ -1458,6 +1571,10 @@ def calculate_drawdown(
 
     return drawdown.tolist()
 
+
+# ============================================================================
+# LIVE SPY
+# ============================================================================
 
 def build_live_spy_curve(
     timestamps,
@@ -1525,6 +1642,10 @@ def build_live_spy_curve(
         return []
 
 
+# ============================================================================
+# SINGLE SYMBOL SIMULATION
+# ============================================================================
+
 def simulate_symbol(
     symbol,
     df,
@@ -1540,6 +1661,11 @@ def simulate_symbol(
     market_dfs=None,
 ):
 
+    # The SignalLayer now computes cross-sectional and sector features.  The
+    # data layer therefore receives the entire configured universe, not just
+    # the symbol currently being simulated.  This fixes the original MU
+    # KeyError and, more importantly, makes those features real instead of
+    # silently empty.
     universe_symbols = list(dict.fromkeys(SYMBOLS + [BENCHMARK_SYMBOL, "QQQ"]))
     data_layer = MarketDataLayer(universe_symbols)
 
@@ -1551,8 +1677,12 @@ def simulate_symbol(
         except Exception as exc:
             log.warning("[%s] Ignoring unusable context data: %s", ss, exc)
 
+    # Guarantee that the target data is present even when callers only pass df.
     normalized_dfs[symbol] = _normalize_market_dataframe(df, symbol)
 
+    # Seed numpy and python random for deterministic iterations when a random
+    # seed is provided. This reduces non-deterministic failures during
+    # repeated backtests and makes 'pretest' behavior reproducible.
     try:
         import random as _random_mod
         np.random.seed(int(random_state))
@@ -1597,6 +1727,8 @@ def simulate_symbol(
 
     last_live_write = 0
 
+    # Cursors let us seed every available universe/context bar up to the
+    # current target timestamp.  No future bar is exposed to the model.
     context_cursors = {ss: 0 for ss in normalized_dfs}
 
     for i in range(n):
@@ -1754,6 +1886,10 @@ def simulate_symbol(
     )
 
 
+# ============================================================================
+# METRICS
+# ============================================================================
+
 def compute_metrics(
     equity_curve,
     trades,
@@ -1863,6 +1999,10 @@ def compute_metrics(
     }
 
 
+# ============================================================================
+# ITERATIONS
+# ============================================================================
+
 def simulate_symbol_iterations(
     symbol,
     df,
@@ -1952,6 +2092,10 @@ def simulate_symbol_iterations(
     )
 
 
+# ============================================================================
+# AGGREGATION
+# ============================================================================
+
 def aggregate_metrics(
     symbol,
     iter_metrics,
@@ -2025,6 +2169,10 @@ def print_symbol_summary(
     )
 
 
+# ============================================================================
+# PORTFOLIO
+# ============================================================================
+
 def build_portfolio_series(
     symbol_avg_equity,
     symbol_dates,
@@ -2086,6 +2234,10 @@ def build_portfolio_series(
     )
 
 
+# ============================================================================
+# BENCHMARK
+# ============================================================================
+
 def fetch_benchmark_series(
     days,
     end_offset_days,
@@ -2111,6 +2263,10 @@ def fetch_benchmark_series(
 
     return closes.sort_index()
 
+
+# ============================================================================
+# CHART
+# ============================================================================
 
 def plot_windows(
     window_charts,
@@ -2216,6 +2372,10 @@ def plot_windows(
     )
 
 
+# ============================================================================
+# WINDOWS
+# ============================================================================
+
 def build_windows():
 
     windows = []
@@ -2261,6 +2421,10 @@ def build_windows():
 
     return windows
 
+
+# ============================================================================
+# SAVE COMPLETED RUN
+# ============================================================================
 
 def save_completed_run(
     all_window_results,
@@ -2339,6 +2503,10 @@ def save_completed_run(
     )
 
 
+# ============================================================================
+# MAIN
+# ============================================================================
+
 def main():
 
     total_units = (
@@ -2402,6 +2570,9 @@ def main():
             symbol_avg_equity = {}
             symbol_dates = {}
 
+            # Fetch the entire universe once per walk-forward window.  The
+            # per-symbol simulation consumes only data up to each bar timestamp,
+            # so this does not introduce look-ahead bias.
             print("Fetching market data for the full universe...")
             market_dfs = {}
             for context_symbol in dict.fromkeys(SYMBOLS + [BENCHMARK_SYMBOL, "QQQ"]):
@@ -2413,6 +2584,10 @@ def main():
                     )
                     print(f"  Loaded {context_symbol}: {len(market_dfs[context_symbol])} bars")
                 except Exception as context_exc:
+                    # A missing context symbol should not crash every other
+                    # symbol.  The feature layer will use neutral/missing-data
+                    # behavior for that symbol.  The target symbol is still
+                    # required below and will raise if its own data is missing.
                     log.warning("[%s] Context fetch failed: %s", context_symbol, context_exc)
                     print(f"  WARNING: could not load {context_symbol}: {context_exc}")
 
@@ -2440,6 +2615,9 @@ def main():
                 )
 
                 if symbol not in market_dfs:
+                    # Target data is mandatory.  Re-fetch once so a transient
+                    # context failure cannot silently turn the target into a
+                    # no-data simulation.
                     market_dfs[symbol] = fetch_bars(
                         symbol,
                         WINDOW_LENGTH_DAYS,
@@ -2703,6 +2881,9 @@ def main():
                     f"({e})."
                 )
 
+        # ====================================================================
+        # FINAL CONSOLE SUMMARY
+        # ====================================================================
 
         print(
             f"\n{'=' * 60}\n"
@@ -2757,6 +2938,9 @@ def main():
                 f"{total_trades:.0f}"
             )
 
+        # ====================================================================
+        # SAVE EVERYTHING
+        # ====================================================================
 
         results_path, chart_path = (
             save_completed_run(
@@ -2888,6 +3072,10 @@ def main():
 
         raise
 
+
+# ============================================================================
+# ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
 

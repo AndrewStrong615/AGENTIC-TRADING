@@ -1,3 +1,31 @@
+"""Conservative strategy optimizer with persistent search history.
+
+Design goals
+------------
+1. Never repeatedly test the same strategy configuration.
+2. Search broadly enough to find real improvements, but keep risk bounded.
+3. Compare candidates against the CURRENT promoted strategy on the same
+   validation periods.
+4. Require consistency across multiple holdouts instead of one lucky period.
+5. Use a smaller promotion margin than the original optimizer, but add
+   absolute safety gates and a worst-case guardrail.
+6. Keep a permanent optimizer history so future runs continue exploring.
+
+Usage
+-----
+    python strategy_optimizer_conservative.py --trials 24
+
+Optional:
+    python strategy_optimizer_conservative.py --trials 24 --seed 123
+    python strategy_optimizer_conservative.py --trials 24 --reset-history
+
+The optimizer writes:
+    trade_data/optimizer_history.csv
+    trade_data/optimizer_results.csv
+    trade_data/optimizer_validation.csv
+    trade_data/best_strategy_config.json
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -36,6 +64,7 @@ CONFIG_KEYS = (
     "ATR_STOP_MULTIPLIER",
 )
 
+# Conservative promotion settings.
 PROMOTION_MARGIN = 0.03
 MIN_SHARPE = 0.30
 MIN_RETURN = 0.0
@@ -79,6 +108,8 @@ def calculate_metrics(summary: dict) -> dict:
     profit_factor = avg("profit_factor_mean")
     trades = avg("num_trades_mean")
 
+    # Same family of metrics as the original optimizer, but retained here as
+    # a single source of truth.
     score = (
         1.00 * sharpe
         + 0.40 * sortino
@@ -113,6 +144,7 @@ def load_current_config() -> dict:
 
 
 def load_history() -> dict:
+    """Return {config_id: row} for every previously tested config."""
     history = {}
     if not HISTORY_PATH.exists():
         return history
@@ -151,6 +183,7 @@ def save_history(rows: list[dict]) -> None:
         "score",
     ]
 
+    # Append only new rows.
     prior_ids = set(load_history())
     new_rows = [row for row in rows if row["config_id"] not in prior_ids]
     if not new_rows:
@@ -164,6 +197,7 @@ def save_history(rows: list[dict]) -> None:
 
 
 def make_candidate_from_current(current: dict, rng: random.Random) -> dict:
+    """Explore a neighborhood around the current config."""
     stop = rng.choice([0.6, 0.8, 1.0, 1.2, 1.4])
     rr = rng.choice([1.8, 2.0, 2.5, 3.0])
 
@@ -224,6 +258,8 @@ def generate_candidates(n: int, current: dict, history: dict, seed: int | None) 
 
     candidates = []
 
+    # ~65% local search / ~35% global exploration. This lets the optimizer
+    # exploit promising regions without collapsing into one tiny neighborhood.
     while len(candidates) < n:
         use_local = bool(current) and rng.random() < 0.65
         cfg = make_candidate_from_current(current, rng) if use_local else make_global_candidate(rng)
@@ -387,6 +423,7 @@ def main() -> None:
 
     save_history(training_rows)
 
+    # Latest-run report.
     if training_rows:
         with RESULTS_PATH.open("w", newline="", encoding="utf-8") as fh:
             fields = sorted(set().union(*(r.keys() for r in training_rows)))
@@ -394,6 +431,7 @@ def main() -> None:
             writer.writeheader()
             writer.writerows(training_rows)
 
+    # Validate the strongest five candidates instead of only three.
     ranked = sorted(training_rows, key=lambda row: as_float(row.get("score"), -999.0), reverse=True)
     top = ranked[: min(5, len(ranked))]
     offsets = [int(x) for x in args.validation_offsets.split(",") if x.strip()]
@@ -424,6 +462,7 @@ def main() -> None:
             )
         candidate_holdouts[candidate["config_id"]] = results
 
+    # Always evaluate the current strategy on exactly the same holdouts.
     current_holdouts = []
     if current:
         for offset in offsets:
@@ -456,6 +495,7 @@ def main() -> None:
             writer.writeheader()
             writer.writerows(validation_rows)
 
+    # First promotion if there is no current strategy.
     if not current:
         eligible = [
             row for row in top

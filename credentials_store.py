@@ -1,3 +1,5 @@
+"""Persistent Alpaca credentials used by the dashboard and backtests."""
+
 import json
 import os
 import threading

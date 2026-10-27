@@ -1,3 +1,23 @@
+"""
+notifications.py — Sends phone push notifications via ntfy.sh (free, no
+signup). Works even when the dashboard browser tab is closed, because the
+notification comes from ntfy's server, not your browser.
+
+Setup:
+    1. Install the ntfy app on your phone (App Store / Play Store), or just
+       use ntfy.sh in a mobile browser.
+    2. Pick a LONG, random, private topic name — anyone who knows it can
+       see your notifications, since ntfy.sh is a public service.
+       e.g. "trading-bot-a1str-9f3k2m8x"
+    3. In the ntfy app, subscribe to that exact topic name.
+    4. Set it as an environment variable before starting the dashboard:
+           setx NTFY_TOPIC "trading-bot-a1str-9f3k2m8x"
+       (open a NEW terminal after setx, same as DASHBOARD_PASSWORD)
+
+If NTFY_TOPIC isn't set, every call here silently does nothing — the rest
+of the dashboard works exactly as before.
+"""
+
 import os
 import logging
 import urllib.request
@@ -10,6 +30,8 @@ NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
 
 
 def send_notification(title: str, message: str, priority: str = "default", tags: str = ""):
+    """priority: 'min'|'low'|'default'|'high'|'urgent'. tags: comma-separated
+    ntfy emoji shortcodes, e.g. 'chart_with_upwards_trend,moneybag'."""
     if not NTFY_TOPIC:
         return
     url = f"{NTFY_SERVER}/{NTFY_TOPIC}"
@@ -44,6 +66,10 @@ def notify_new_trade(symbol: str, pnl_pct: float, exit_reason: str):
 
 
 def notify_order_placed(symbol: str, action: str, qty: int, price: float, reason: str = ""):
+    """Immediate notification when an order is approved and sent.
+
+    action: 'buy' or 'sell'
+    """
     try:
         emoji = "chart_with_upwards_trend" if action.lower() == "buy" else "chart_with_downwards_trend"
         title = f"Order {action.upper()} {symbol}"

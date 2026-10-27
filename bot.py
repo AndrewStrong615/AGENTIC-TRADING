@@ -1,3 +1,11 @@
+"""
+trader_v3.py — Live trading entry point.
+
+Uses credentials_store.py so direct launches and dashboard launches use the
+same persisted Alpaca credentials. Uses an Alpaca base URL without /v2;
+tradeapi.REST adds its API version path itself.
+"""
+
 import os
 import time
 import threading
@@ -23,6 +31,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("trader")
 
+# -----------------------------------------------------------------------------
+# Alpaca credentials
+# -----------------------------------------------------------------------------
+# credentials_store.py is the primary source. Environment variables remain a
+# fallback for compatibility with older setups.
 try:
     creds = load_credentials()
 except Exception as e:
@@ -37,6 +50,7 @@ BASE_URL = (
     or "https://paper-api.alpaca.markets"
 ).rstrip("/")
 
+# Never print the actual credentials.
 log.info(
     "Alpaca credentials loaded: api_key=%s secret_key=%s base_url=%s",
     "yes" if API_KEY else "NO",
